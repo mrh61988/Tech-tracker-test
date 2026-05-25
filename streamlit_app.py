@@ -571,6 +571,7 @@ ops_file = st.sidebar.file_uploader("Upload Lowes Ops Export (CSV)", type=['csv'
 if time_file and ops_file:
     try:
         CORE_TECHS = ['Bryan Pickett', 'Edward Lopez', 'Erik Tange', 'Matt Schlosser', 'Michael Owens', 'Nathan Smith', 'Sean Marble', 'Tanner LaForge']
+        display_dfs = {} # INITIALIZED EARLY TO SOLVE NameError ASSIGNMENTS
         
         # --- 1. Raw Read of Ops Data ---
         ops_bytes = ops_file.getvalue()
@@ -812,7 +813,7 @@ if time_file and ops_file:
 
         st.session_state['sean_absence_penalty_global'] = sean_penalty_value
 
-        # === FIXED: DYNAMIC BASES ASSIGNMENTS RESTORED ON TIME ===
+        # === DYNAMIC BASES ASSIGNMENTS RESTORED ON TIME ===
         final_df['LSI_Goal_Hrs'] = final_df['Simple_Installs_Count'] * 2.0
         final_df['WH_Goal_Hrs'] = final_df['Water_Heaters_Count'] * 3.5
         final_df['Total_Goal_Hrs'] = final_df['LSI_Goal_Hrs'] + final_df['WH_Goal_Hrs']
@@ -919,9 +920,7 @@ if time_file and ops_file:
         )
         df_macro_pay['Net_Profit_Raw'] = df_macro_pay['Total Invoice Amount'] - df_macro_pay['Combined_Lowe_Costs'] - df_macro_pay['Assumed_Labor_Payload']
 
-        total_assumed_pay_adjusted = max(0.0, df_macro_pay['Assumed_Labor_Payload'].sum() - sean_penalty_value)
-        pay_ratio_pct_adjusted = (total_assumed_pay_adjusted / raw_unsplit_volume * 100) if raw_unsplit_volume > 0 else 0.0
-
+        # Financial view matrix profiles mappings
         bu_gross_rev = unexploded_ops.groupby('Business Unit')['Total Invoice Amount'].sum().reset_index()
         bu_gross_rev.columns = ['Business Unit', 'Gross Invoiced Revenue Raw']
         total_macro_sum = bu_gross_rev['Gross Invoiced Revenue Raw'].sum() if bu_gross_rev['Gross Invoiced Revenue Raw'].sum() > 0 else 1.0
@@ -938,12 +937,39 @@ if time_file and ops_file:
         bu_financial_matrix['Pay % of Revenue'] = bu_financial_matrix['Pay % of Revenue'].apply(lambda x: f"{x:.1f}%")
         bu_financial_matrix['Gross Invoiced Revenue'] = bu_financial_matrix['Gross Invoiced Revenue Raw'].apply(lambda x: f"${x:,.2f}")
 
+        # Lowe's Cost Performance Metrics Array Mapping
+        cc_matrix = df_macro_pay.groupby('Business Unit').agg(
+            Jobs=('#ID', 'count'),
+            Gross_Invoiced_Raw=('Total Invoice Amount', 'sum'),
+            Combined_Cost_Total_Raw=('Combined_Lowe_Costs', 'sum'),
+            Assumed_Labor_Payload_Raw=('Assumed_Labor_Payload', 'sum'),
+            Net_Profit_Total_Raw=('Net_Profit_Raw', 'sum')
+        ).reset_index()
+        
+        for idx, r in cc_matrix.iterrows():
+            if r['Business Unit'] == 'Lowes - Simple Installs':
+                cc_matrix.loc[idx, 'Assumed_Labor_Payload_Raw'] = max(0.0, cc_matrix.loc[idx, 'Assumed_Labor_Payload_Raw'] - sean_penalty_value)
+                cc_matrix.loc[idx, 'Net_Profit_Total_Raw'] = cc_matrix.loc[idx, 'Gross_Invoiced_Raw'] - cc_matrix.loc[idx, 'Combined_Cost_Total_Raw'] - cc_matrix.loc[idx, 'Assumed_Labor_Payload_Raw']
+        
+        cc_matrix['Cost Ratio % vs Rev'] = np.where(cc_matrix['Gross_Invoiced_Raw'] > 0, (cc_matrix['Combined_Cost_Total_Raw'] / cc_matrix['Gross_Invoiced_Raw'] * 100), 0.0)
+        cc_matrix['Cost Ratio % vs Rev'] = cc_matrix['Cost Ratio % vs Rev'].apply(lambda x: f"{x:.1f}%")
+        cc_matrix['Net Profit (%)'] = np.where(cc_matrix['Gross_Invoiced_Raw'] > 0, (cc_matrix['Net_Profit_Total_Raw'] / cc_matrix['Gross_Invoiced_Raw'] * 100), 0.0)
+        cc_matrix['Net Profit (%)'] = cc_matrix['Net Profit (%)'].apply(lambda x: f"{x:.1f}%")
+        cc_matrix['Gross Invoiced Revenue'] = cc_matrix['Gross_Invoiced_Raw'].apply(lambda x: f"${x:,.2f}")
+        cc_matrix['Total Combined Cost'] = cc_matrix['Combined_Cost_Total_Raw'].apply(lambda x: f"${x:,.2f}")
+        cc_matrix['Tech Wage Burden'] = cc_matrix['Assumed_Labor_Payload_Raw'].apply(lambda x: f"${x:,.2f}")
+        cc_matrix['Net Profit ($)'] = cc_matrix['Net_Profit_Total_Raw'].apply(lambda x: f"${x:,.2f}")
+        show_cc = cc_matrix[['Business Unit', 'Jobs', 'Gross Invoiced Revenue', 'Total Combined Cost', 'Cost Ratio % vs Rev', 'Tech Wage Burden', 'Net Profit ($)', 'Net Profit (%)']].rename(columns={'Jobs': 'Jobs Assigned'})
+
         blank_cols = ['Name']
         for d in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]:
             if f'{d} Jobs' in final_df.columns: blank_cols.extend([f'{d} Jobs', f'{d} Clocked', f'{d} Job Time', f'{d} Diff'])
         display_dfs['Manager'] = final_df[blank_cols]
 
-        # Render layout interfaces
+        # Render dashboard interfaces layout panels
+        tab_names = ["Weekly Summary", "Manager Overview", "Individual Tech Report", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "🧪 Test Section"]
+        tabs = st.tabs(tab_names)
+        
         with tabs[0]:
             st.markdown('<h3>Weekly Efficiency Summary</h3>', unsafe_allow_html=True)
             st.components.v1.html("""
@@ -975,8 +1001,9 @@ if time_file and ops_file:
                     if row['Name'] == 'TOTAL DIVISION':
                         return ['background-color: #e2e3e5; font-weight: bold; color: #383d41;'] * len(row)
                     styles = [''] * len(row)
-                    idx = row.index.get_loc('WH Efficiency')
-                    styles[idx] = 'background-color: #fff3cd; font-weight: bold; color: #856404;'
+                    idx = row['WH Efficiency'] if 'WH Efficiency' in row.index else 0
+                    if 'WH Efficiency' in row.index:
+                        styles[row.index.get_loc('WH Efficiency')] = 'background-color: #fff3cd; font-weight: bold; color: #856404;'
                     return styles
                 
                 styled_weekly = display_dfs['Weekly'].reset_index(drop=True).style.apply(highlight_weekly_rows, axis=1)
