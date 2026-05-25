@@ -1,4 +1,4 @@
-import streamlit as st
+import streamlit st
 import pandas as pd
 import numpy as np
 import io
@@ -564,14 +564,14 @@ def show_advanced_reporting(unexploded_ops, ops_df, final_df, bounds_df, delayed
         else: st.info("No timeline momentum compliance delays located inside current operational data streams.")
 
 # --- THE MAIN TOP-LEVEL BASE EXECELINE PIPELINE LAYER BLOCK ---
-st.sidebar.header("📂 Data Loading Pipeline")
+st.sidebar.header("📊 Data Loading Pipeline")
 time_file = st.sidebar.file_uploader("Upload Time Sheet (CSV)", type=['csv'])
 ops_file = st.sidebar.file_uploader("Upload Lowes Ops Export (CSV)", type=['csv'])
 
 if time_file and ops_file:
     try:
         CORE_TECHS = ['Bryan Pickett', 'Edward Lopez', 'Erik Tange', 'Matt Schlosser', 'Michael Owens', 'Nathan Smith', 'Sean Marble', 'Tanner LaForge']
-        display_dfs = {} # INITIALIZED EARLY TO SOLVE NameError ASSIGNMENTS
+        display_dfs = {} # INITIALIZED EARLY TO PREVENT 'display_dfs' IS NOT DEFINED EXCEPTIONS
         
         # --- 1. Raw Read of Ops Data ---
         ops_bytes = ops_file.getvalue()
@@ -625,7 +625,7 @@ if time_file and ops_file:
             ["All Uploaded Data", "This Week (Mon-Sun)", "Last Week (Mon-Sun)", "This Month", "Last Month", "Custom Date Range"]
         )
 
-        today = datetime.date(2026, 5, 25) # Standard operational context anchor
+        today = datetime.date(2026, 5, 25) # Contextual current time anchoring multi-week files
         start_date, end_date = None, None
 
         if date_filter_option == "This Week (Mon-Sun)":
@@ -651,7 +651,7 @@ if time_file and ops_file:
             start_dt = pd.to_datetime(start_date)
             end_dt = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
             
-            # Truncate both structures live prior to data compilation loops
+            # Truncate raw logs down dynamically before any aggregation begins
             ops_df = ops_df[(ops_df['Job_Date_Parsed'] >= start_dt) & (ops_df['Job_Date_Parsed'] <= end_dt)]
             if is_standard_time_csv:
                 sample_df = sample_df[(sample_df['Clock_In_dt'] >= start_dt) & (sample_df['Clock_In_dt'] <= end_dt)]
@@ -733,9 +733,14 @@ if time_file and ops_file:
             bounds_df['Total_Span_Hrs'] = (bounds_df['Last_Punch'] - bounds_df['First_Punch']).dt.total_seconds() / 3600.0
             bounds_df['Total Time'] = bounds_df['Total_Span_Hrs'].apply(format_hm)
             delayed_launches_df = bounds_df[bounds_df.apply(check_late, axis=1)].copy()
+            if is_standard_time_csv:
+                sample_df['Short_Date'] = sample_df['Clock_In_dt'].dt.strftime('%m-%d-%Y')
+                ts_eod = sample_df.groupby(['User', 'Short_Date'])['Clock_Out_dt'].max().reset_index()
+                ts_eod.columns = ['Assigned Team Members', 'Short_Date', 'Actual_Clock_Out']
         else:
             bounds_df = pd.DataFrame(columns=['Assigned Team Members', 'Short_Date', 'First_Punch', 'Last_Punch', 'First_Status', 'First Status Update', 'Last Status Update', 'Total_Span_Hrs', 'Total Time'])
             delayed_launches_df = bounds_df.copy()
+            ts_eod = pd.DataFrame(columns=['Assigned Team Members', 'Short_Date', 'Actual_Clock_Out'])
 
         exploded_rows = []
         for idx, row in ops_df.iterrows():
@@ -810,17 +815,15 @@ if time_file and ops_file:
             sean_penalty_value = unworked_clocked_days * 269.23
         else:
             sean_penalty_value = 0.0
-
         st.session_state['sean_absence_penalty_global'] = sean_penalty_value
 
-        # === DYNAMIC BASES ASSIGNMENTS RESTORED ON TIME ===
+        # === DYNAMIC METRICS DEFINITIONS ===
         final_df['LSI_Goal_Hrs'] = final_df['Simple_Installs_Count'] * 2.0
         final_df['WH_Goal_Hrs'] = final_df['Water_Heaters_Count'] * 3.5
         final_df['Total_Goal_Hrs'] = final_df['LSI_Goal_Hrs'] + final_df['WH_Goal_Hrs']
         final_df['Assumed_LSI_Clocked'] = np.where(final_df['Total_Goal_Hrs'] > 0, final_df['Total_Weekly_Clocked_Hrs'] * (final_df['LSI_Goal_Hrs'] / final_df['Total_Goal_Hrs']), 0.0)
         final_df['Assumed_WH_Clocked'] = np.where(final_df['Total_Goal_Hrs'] > 0, final_df['Total_Weekly_Clocked_Hrs'] * (final_df['WH_Goal_Hrs'] / final_df['Total_Goal_Hrs']), 0.0)
 
-        # Performance logic thresholds mapped natively
         final_df['Total_Weekly_Diff_Hrs'] = final_df['Total_Weekly_Clocked_Hrs'] - final_df['Total_Weekly_Job_Hrs']
         final_df['Daily_Avg_Diff_Hrs'] = np.where(final_df['Days_Worked'] > 0, final_df['Total_Weekly_Diff_Hrs'] / final_df['Days_Worked'], 0.0)
         
@@ -835,76 +838,19 @@ if time_file and ops_file:
         final_df['Simple Installs Eff'] = final_df['LSI_Eff_Raw'].apply(lambda x: f"{x:.1f}%")
         final_df['Water Heaters Eff'] = final_df['WH_Eff_Raw'].apply(lambda x: f"{x:.1f}%")
 
-        bu_summary_df = pd.DataFrame()
-        bu_summary_df['Name'] = final_df['Name']
-        bu_summary_df['Total Clocked'] = final_df['Total_Weekly_Clocked_Hrs'].apply(format_hm)
-        bu_summary_df['Total Jobs'] = final_df['Total_Weekly_Job_Count'].astype(int)
-        bu_summary_df['LSI Jobs'] = final_df['Simple_Installs_Count'].astype(int)
-        bu_summary_df['LSI Tracked Hours'] = final_df['Simple Installs']
-        bu_summary_df['LSI Efficiency'] = final_df['Simple Installs Eff']
-        bu_summary_df['WH Jobs'] = final_df['Water_Heaters_Count'].astype(int)
-        bu_summary_df['WH Tracked Hours'] = final_df['Water Heaters']
-        bu_summary_df['WH Efficiency'] = final_df['Water Heaters Eff']
-        bu_summary_df['Total Efficiency'] = np.where(final_df['Total_Weekly_Clocked_Hrs'] > 0, (final_df['Total_Weekly_Job_Hrs'] / final_df['Total_Weekly_Clocked_Hrs']) * 100, 0.0)
-        bu_summary_df['Total Efficiency'] = bu_summary_df['Total Efficiency'].apply(lambda x: f"{x:.1f}%")
-        bu_summary_df['Total Unallocated Hours'] = final_df['Total_Weekly_Diff_Hrs'].apply(format_hm)
-
-        # Calculate and append dynamic aggregate rows based on scope boundaries
-        total_clocked_sum = final_df['Total_Weekly_Clocked_Hrs'].sum()
-        total_jobs_sum = final_df['Total_Weekly_Job_Count'].sum()
-        total_lsi_jobs_sum = final_df['Simple_Installs_Count'].sum()
-        total_lsi_hrs_sum = final_df['Simple_Installs_Hrs'].sum()
-        total_wh_jobs_sum = final_df['Water_Heaters_Count'].sum()
-        total_wh_hrs_sum = final_df['Water_Heaters_Hrs'].sum()
-        total_job_hrs_sum = final_df['Total_Weekly_Job_Hrs'].sum()
-        total_diff_hrs_sum = final_df['Total_Weekly_Diff_Hrs'].sum()
-        
-        total_lsi_goal_hrs = final_df['Assumed_LSI_Clocked'].sum()
-        total_wh_goal_hrs = final_df['Assumed_WH_Clocked'].sum()
-        
-        blended_lsi_eff = (total_lsi_hrs_sum / total_lsi_goal_hrs * 100) if total_lsi_goal_hrs > 0 else 0.0
-        blended_wh_eff = (total_wh_hrs_sum / total_wh_goal_hrs * 100) if total_wh_goal_hrs > 0 else 0.0
-        blended_total_eff = (total_job_hrs_sum / total_clocked_sum * 100) if total_clocked_sum > 0 else 0.0
-        
-        total_row = pd.DataFrame([{
-            'Name': 'TOTAL DIVISION',
-            'Total Clocked': format_hm(total_clocked_sum),
-            'Total Jobs': int(total_jobs_sum),
-            'LSI Jobs': int(total_lsi_jobs_sum),
-            'LSI Tracked Hours': format_hm(total_lsi_hrs_sum),
-            'LSI Efficiency': f"{blended_lsi_eff:.1f}%",
-            'WH Jobs': int(total_wh_jobs_sum),
-            'WH Tracked Hours': format_hm(total_wh_hrs_sum),
-            'WH Efficiency': f"{blended_wh_eff:.1f}%",
-            'Total Efficiency': f"{blended_total_eff:.1f}%",
-            'Total Unallocated Hours': format_hm(total_diff_hrs_sum)
-        }])
-        bu_summary_df = pd.concat([bu_summary_df, total_row], ignore_index=True)
-        display_dfs['Weekly'] = bu_summary_df
-
-        # Downstream mapping variables
-        for day in days:
-            if f'{day}_Clocked_Hrs' in final_df.columns and f'{day}_Job_Hrs' in final_df.columns:
-                final_df[day + '_Diff_Hrs'] = final_df[day + '_Clocked_Hrs'] - final_df[day + '_Job_Hrs']
-                final_df[f'{day} Jobs'] = final_df[day + '_Job_Count'].astype(int)
-                final_df[f'{day} Clocked'] = final_df[day + '_Clocked_Hrs'].apply(format_hm)
-                final_df[f'{day} Job Time'] = final_df[day + '_Job_Hrs'].apply(format_hm)
-                final_df[f'{day} Diff'] = final_df[day + '_Diff_Hrs'].apply(format_hm)
-                
-                day_df = pd.DataFrame()
-                day_df['Name'] = final_df['Name']
-                day_df[f'{day} Jobs'] = final_df[f'{day} Jobs']
-                day_df[f'{day} Clocked'] = final_df[f'{day} Clocked']
-                day_df[f'{day} Job Time'] = final_df[f'{day} Job Time']
-                day_df[f'{day} Diff'] = final_df[f'{day} Diff']
-                display_dfs[day] = day_df
-
-        # Financial view calculations pipelines sync post-filter
+        # === FIXED: DYNAMIC PAY DELEGATION WAGE ALLOCATION METRIC PIPELINE ===
         rev_per_hour_df_calc = final_df.copy()
         rev_per_hour_df_calc['Assumed Pay Amount'] = rev_per_hour_df_calc.apply(get_adjusted_table_pay, axis=1)
         pay_mapping_dict = dict(zip(rev_per_hour_df_calc['Name'], rev_per_hour_df_calc['Assumed Pay Amount']))
         
         ops_df['Computed_Row_Pay'] = ops_df['Name'].map(pay_mapping_dict).fillna(0.0)
+        
+        # --- FIXED: GENERATED AND MERGED 'Tech_Total_Work_Hrs' SAFELY PREVENTING KEYERRORS ---
+        tech_total_field_hrs = ops_df.groupby('Name')['Total_Job_Time_Hours'].sum().reset_index().rename(columns={'Total_Job_Time_Hours': 'Tech_Total_Work_Hrs'})
+        if 'Tech_Total_Work_Hrs' in ops_df.columns: 
+            ops_df = ops_df.drop(columns=['Tech_Total_Work_Hrs'])
+        ops_df = pd.merge(ops_df, tech_total_field_hrs, on='Name', how='left')
+        
         ops_df['Job_Time_Weight'] = np.where(ops_df['Tech_Total_Work_Hrs'] > 0, ops_df['Total_Job_Time_Hours'] / ops_df['Tech_Total_Work_Hrs'], 0.0)
         ops_df['Allocated_Job_Pay'] = ops_df['Computed_Row_Pay'] * ops_df['Job_Time_Weight']
         ops_df['Allocated_Job_Pay'] = np.where(
@@ -954,19 +900,83 @@ if time_file and ops_file:
         cc_matrix['Cost Ratio % vs Rev'] = np.where(cc_matrix['Gross_Invoiced_Raw'] > 0, (cc_matrix['Combined_Cost_Total_Raw'] / cc_matrix['Gross_Invoiced_Raw'] * 100), 0.0)
         cc_matrix['Cost Ratio % vs Rev'] = cc_matrix['Cost Ratio % vs Rev'].apply(lambda x: f"{x:.1f}%")
         cc_matrix['Net Profit (%)'] = np.where(cc_matrix['Gross_Invoiced_Raw'] > 0, (cc_matrix['Net_Profit_Total_Raw'] / cc_matrix['Gross_Invoiced_Raw'] * 100), 0.0)
-        cc_matrix['Net Profit (%)'] = cc_matrix['Net Profit (%)'].apply(lambda x: f"{x:.1f}%")
+        cc_matrix['Net Profit (%)'] = cc_matrix['Net Profit_Total_Raw'].apply(lambda x: f"{x:.1f}%")
         cc_matrix['Gross Invoiced Revenue'] = cc_matrix['Gross_Invoiced_Raw'].apply(lambda x: f"${x:,.2f}")
         cc_matrix['Total Combined Cost'] = cc_matrix['Combined_Cost_Total_Raw'].apply(lambda x: f"${x:,.2f}")
         cc_matrix['Tech Wage Burden'] = cc_matrix['Assumed_Labor_Payload_Raw'].apply(lambda x: f"${x:,.2f}")
         cc_matrix['Net Profit ($)'] = cc_matrix['Net_Profit_Total_Raw'].apply(lambda x: f"${x:,.2f}")
         show_cc = cc_matrix[['Business Unit', 'Jobs', 'Gross Invoiced Revenue', 'Total Combined Cost', 'Cost Ratio % vs Rev', 'Tech Wage Burden', 'Net Profit ($)', 'Net Profit (%)']].rename(columns={'Jobs': 'Jobs Assigned'})
 
+        # Build dynamic dashboard total summaries
+        bu_summary_df = pd.DataFrame()
+        bu_summary_df['Name'] = final_df['Name']
+        bu_summary_df['Total Clocked'] = final_df['Total_Weekly_Clocked_Hrs'].apply(format_hm)
+        bu_summary_df['Total Jobs'] = final_df['Total_Weekly_Job_Count'].astype(int)
+        bu_summary_df['LSI Jobs'] = final_df['Simple_Installs_Count'].astype(int)
+        bu_summary_df['LSI Tracked Hours'] = final_df['Simple Installs']
+        bu_summary_df['LSI Efficiency'] = final_df['Simple Installs Eff']
+        bu_summary_df['WH Jobs'] = final_df['Water_Heaters_Count'].astype(int)
+        bu_summary_df['WH Tracked Hours'] = final_df['Water Heaters']
+        bu_summary_df['WH Efficiency'] = final_df['Water Heaters Eff']
+        bu_summary_df['Total Efficiency'] = np.where(final_df['Total_Weekly_Clocked_Hrs'] > 0, (final_df['Total_Weekly_Job_Hrs'] / final_df['Total_Weekly_Clocked_Hrs']) * 100, 0.0)
+        bu_summary_df['Total Efficiency'] = bu_summary_df['Total Efficiency'].apply(lambda x: f"{x:.1f}%")
+        bu_summary_df['Total Unallocated Hours'] = final_df['Total_Weekly_Diff_Hrs'].apply(format_hm)
+
+        total_clocked_sum = final_df['Total_Weekly_Clocked_Hrs'].sum()
+        total_jobs_sum = final_df['Total_Weekly_Job_Count'].sum()
+        total_lsi_jobs_sum = final_df['Simple_Installs_Count'].sum()
+        total_lsi_hrs_sum = final_df['Simple_Installs_Hrs'].sum()
+        total_wh_jobs_sum = final_df['Water_Heaters_Count'].sum()
+        total_wh_hrs_sum = final_df['Water_Heaters_Hrs'].sum()
+        total_job_hrs_sum = final_df['Total_Weekly_Job_Hrs'].sum()
+        total_diff_hrs_sum = final_df['Total_Weekly_Diff_Hrs'].sum()
+        
+        total_lsi_goal_hrs = final_df['Assumed_LSI_Clocked'].sum()
+        total_wh_goal_hrs = final_df['Assumed_WH_Clocked'].sum()
+        
+        blended_lsi_eff = (total_lsi_hrs_sum / total_lsi_goal_hrs * 100) if total_lsi_goal_hrs > 0 else 0.0
+        blended_wh_eff = (total_wh_hrs_sum / total_wh_goal_hrs * 100) if total_wh_goal_hrs > 0 else 0.0
+        blended_total_eff = (total_job_hrs_sum / total_clocked_sum * 100) if total_clocked_sum > 0 else 0.0
+        
+        total_row = pd.DataFrame([{
+            'Name': 'TOTAL DIVISION',
+            'Total Clocked': format_hm(total_clocked_sum),
+            'Total Jobs': int(total_jobs_sum),
+            'LSI Jobs': int(total_lsi_jobs_sum),
+            'LSI Tracked Hours': format_hm(total_lsi_hrs_sum),
+            'LSI Efficiency': f"{blended_lsi_eff:.1f}%",
+            'WH Jobs': int(total_wh_jobs_sum),
+            'WH Tracked Hours': format_hm(total_wh_hrs_sum),
+            'WH Efficiency': f"{blended_wh_eff:.1f}%",
+            'Total Efficiency': f"{blended_total_eff:.1f}%",
+            'Total Unallocated Hours': format_hm(total_diff_hrs_sum)
+        }])
+        bu_summary_df = pd.concat([bu_summary_df, total_row], ignore_index=True)
+        display_dfs['Weekly'] = bu_summary_df
+
+        # Day mapping pivots definitions
+        for day in days:
+            if f'{day}_Clocked_Hrs' in final_df.columns and f'{day}_Job_Hrs' in final_df.columns:
+                final_df[day + '_Diff_Hrs'] = final_df[day + '_Clocked_Hrs'] - final_df[day + '_Job_Hrs']
+                final_df[f'{day} Jobs'] = final_df[day + '_Job_Count'].astype(int)
+                final_df[f'{day} Clocked'] = final_df[day + '_Clocked_Hrs'].apply(format_hm)
+                final_df[f'{day} Job Time'] = final_df[day + '_Job_Hrs'].apply(format_hm)
+                final_df[f'{day} Diff'] = final_df[day + '_Diff_Hrs'].apply(format_hm)
+                
+                day_df = pd.DataFrame()
+                day_df['Name'] = final_df['Name']
+                day_df[f'{day} Jobs'] = final_df[f'{day} Jobs']
+                day_df[f'{day} Clocked'] = final_df[f'{day} Clocked']
+                day_df[f'{day} Job Time'] = final_df[f'{day} Job Time']
+                day_df[f'{day} Diff'] = final_df[f'{day} Diff']
+                display_dfs[day] = day_df
+
         blank_cols = ['Name']
         for d in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]:
             if f'{d} Jobs' in final_df.columns: blank_cols.extend([f'{d} Jobs', f'{d} Clocked', f'{d} Job Time', f'{d} Diff'])
         display_dfs['Manager'] = final_df[blank_cols]
 
-        # Render dashboard interfaces layout panels
+        # Render layout interfaces tabs view
         tab_names = ["Weekly Summary", "Manager Overview", "Individual Tech Report", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "🧪 Test Section"]
         tabs = st.tabs(tab_names)
         
@@ -1001,7 +1011,6 @@ if time_file and ops_file:
                     if row['Name'] == 'TOTAL DIVISION':
                         return ['background-color: #e2e3e5; font-weight: bold; color: #383d41;'] * len(row)
                     styles = [''] * len(row)
-                    idx = row['WH Efficiency'] if 'WH Efficiency' in row.index else 0
                     if 'WH Efficiency' in row.index:
                         styles[row.index.get_loc('WH Efficiency')] = 'background-color: #fff3cd; font-weight: bold; color: #856404;'
                     return styles
