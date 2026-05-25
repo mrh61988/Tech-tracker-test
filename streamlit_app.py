@@ -1,4 +1,4 @@
-import streamlit st
+import streamlit as st
 import pandas as pd
 import numpy as np
 import io
@@ -564,14 +564,14 @@ def show_advanced_reporting(unexploded_ops, ops_df, final_df, bounds_df, delayed
         else: st.info("No timeline momentum compliance delays located inside current operational data streams.")
 
 # --- THE MAIN TOP-LEVEL BASE EXECELINE PIPELINE LAYER BLOCK ---
-st.sidebar.header("📊 Data Loading Pipeline")
+st.sidebar.header("📂 Data Loading Pipeline")
 time_file = st.sidebar.file_uploader("Upload Time Sheet (CSV)", type=['csv'])
 ops_file = st.sidebar.file_uploader("Upload Lowes Ops Export (CSV)", type=['csv'])
 
 if time_file and ops_file:
     try:
         CORE_TECHS = ['Bryan Pickett', 'Edward Lopez', 'Erik Tange', 'Matt Schlosser', 'Michael Owens', 'Nathan Smith', 'Sean Marble', 'Tanner LaForge']
-        display_dfs = {} # INITIALIZED EARLY TO PREVENT 'display_dfs' IS NOT DEFINED EXCEPTIONS
+        display_dfs = {} # INITIALIZED EARLY TO PREVENT NameError EXCEPTIONS
         
         # --- 1. Raw Read of Ops Data ---
         ops_bytes = ops_file.getvalue()
@@ -625,7 +625,7 @@ if time_file and ops_file:
             ["All Uploaded Data", "This Week (Mon-Sun)", "Last Week (Mon-Sun)", "This Month", "Last Month", "Custom Date Range"]
         )
 
-        today = datetime.date(2026, 5, 25) # Contextual current time anchoring multi-week files
+        today = datetime.date(2026, 5, 25) # Standard contextual current timeline anchor
         start_date, end_date = None, None
 
         if date_filter_option == "This Week (Mon-Sun)":
@@ -651,7 +651,7 @@ if time_file and ops_file:
             start_dt = pd.to_datetime(start_date)
             end_dt = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
             
-            # Truncate raw logs down dynamically before any aggregation begins
+            # Truncate both structures live prior to data compilation loops
             ops_df = ops_df[(ops_df['Job_Date_Parsed'] >= start_dt) & (ops_df['Job_Date_Parsed'] <= end_dt)]
             if is_standard_time_csv:
                 sample_df = sample_df[(sample_df['Clock_In_dt'] >= start_dt) & (sample_df['Clock_In_dt'] <= end_dt)]
@@ -817,7 +817,7 @@ if time_file and ops_file:
             sean_penalty_value = 0.0
         st.session_state['sean_absence_penalty_global'] = sean_penalty_value
 
-        # === DYNAMIC METRICS DEFINITIONS ===
+        # === METRIC ALLOCATIONS DEFINITIONS ===
         final_df['LSI_Goal_Hrs'] = final_df['Simple_Installs_Count'] * 2.0
         final_df['WH_Goal_Hrs'] = final_df['Water_Heaters_Count'] * 3.5
         final_df['Total_Goal_Hrs'] = final_df['LSI_Goal_Hrs'] + final_df['WH_Goal_Hrs']
@@ -838,14 +838,14 @@ if time_file and ops_file:
         final_df['Simple Installs Eff'] = final_df['LSI_Eff_Raw'].apply(lambda x: f"{x:.1f}%")
         final_df['Water Heaters Eff'] = final_df['WH_Eff_Raw'].apply(lambda x: f"{x:.1f}%")
 
-        # === FIXED: DYNAMIC PAY DELEGATION WAGE ALLOCATION METRIC PIPELINE ===
+        # === DYNAMIC PAY DELEGATION ALLOCATION MODEL PIPELINE SECTIONS ===
         rev_per_hour_df_calc = final_df.copy()
         rev_per_hour_df_calc['Assumed Pay Amount'] = rev_per_hour_df_calc.apply(get_adjusted_table_pay, axis=1)
         pay_mapping_dict = dict(zip(rev_per_hour_df_calc['Name'], rev_per_hour_df_calc['Assumed Pay Amount']))
         
         ops_df['Computed_Row_Pay'] = ops_df['Name'].map(pay_mapping_dict).fillna(0.0)
         
-        # --- FIXED: GENERATED AND MERGED 'Tech_Total_Work_Hrs' SAFELY PREVENTING KEYERRORS ---
+        # --- FIXED: PREVENTS 'Tech_Total_Work_Hrs' KEYERROR DISCREPANCIES ---
         tech_total_field_hrs = ops_df.groupby('Name')['Total_Job_Time_Hours'].sum().reset_index().rename(columns={'Total_Job_Time_Hours': 'Tech_Total_Work_Hrs'})
         if 'Tech_Total_Work_Hrs' in ops_df.columns: 
             ops_df = ops_df.drop(columns=['Tech_Total_Work_Hrs'])
@@ -866,7 +866,7 @@ if time_file and ops_file:
         )
         df_macro_pay['Net_Profit_Raw'] = df_macro_pay['Total Invoice Amount'] - df_macro_pay['Combined_Lowe_Costs'] - df_macro_pay['Assumed_Labor_Payload']
 
-        # Financial view matrix profiles mappings
+        # Financial view matrix profiles mappings calculations
         bu_gross_rev = unexploded_ops.groupby('Business Unit')['Total Invoice Amount'].sum().reset_index()
         bu_gross_rev.columns = ['Business Unit', 'Gross Invoiced Revenue Raw']
         total_macro_sum = bu_gross_rev['Gross Invoiced Revenue Raw'].sum() if bu_gross_rev['Gross Invoiced Revenue Raw'].sum() > 0 else 1.0
@@ -883,7 +883,7 @@ if time_file and ops_file:
         bu_financial_matrix['Pay % of Revenue'] = bu_financial_matrix['Pay % of Revenue'].apply(lambda x: f"{x:.1f}%")
         bu_financial_matrix['Gross Invoiced Revenue'] = bu_financial_matrix['Gross Invoiced Revenue Raw'].apply(lambda x: f"${x:,.2f}")
 
-        # Lowe's Cost Performance Metrics Array Mapping
+        # Lowe's Cost Performance Metrics Array Mapping Layout Matrix
         cc_matrix = df_macro_pay.groupby('Business Unit').agg(
             Jobs=('#ID', 'count'),
             Gross_Invoiced_Raw=('Total Invoice Amount', 'sum'),
@@ -900,14 +900,16 @@ if time_file and ops_file:
         cc_matrix['Cost Ratio % vs Rev'] = np.where(cc_matrix['Gross_Invoiced_Raw'] > 0, (cc_matrix['Combined_Cost_Total_Raw'] / cc_matrix['Gross_Invoiced_Raw'] * 100), 0.0)
         cc_matrix['Cost Ratio % vs Rev'] = cc_matrix['Cost Ratio % vs Rev'].apply(lambda x: f"{x:.1f}%")
         cc_matrix['Net Profit (%)'] = np.where(cc_matrix['Gross_Invoiced_Raw'] > 0, (cc_matrix['Net_Profit_Total_Raw'] / cc_matrix['Gross_Invoiced_Raw'] * 100), 0.0)
-        cc_matrix['Net Profit (%)'] = cc_matrix['Net Profit_Total_Raw'].apply(lambda x: f"{x:.1f}%")
+        
+        # --- FIXED: PREVENTS THE STRING FORMAT OVERWRITE TRUNCATION BUG ---
+        cc_matrix['Net Profit (%)'] = cc_matrix['Net Profit (%)'].apply(lambda x: f"{x:.1f}%")
         cc_matrix['Gross Invoiced Revenue'] = cc_matrix['Gross_Invoiced_Raw'].apply(lambda x: f"${x:,.2f}")
         cc_matrix['Total Combined Cost'] = cc_matrix['Combined_Cost_Total_Raw'].apply(lambda x: f"${x:,.2f}")
         cc_matrix['Tech Wage Burden'] = cc_matrix['Assumed_Labor_Payload_Raw'].apply(lambda x: f"${x:,.2f}")
         cc_matrix['Net Profit ($)'] = cc_matrix['Net_Profit_Total_Raw'].apply(lambda x: f"${x:,.2f}")
         show_cc = cc_matrix[['Business Unit', 'Jobs', 'Gross Invoiced Revenue', 'Total Combined Cost', 'Cost Ratio % vs Rev', 'Tech Wage Burden', 'Net Profit ($)', 'Net Profit (%)']].rename(columns={'Jobs': 'Jobs Assigned'})
 
-        # Build dynamic dashboard total summaries
+        # Build dashboard layout matrix rows
         bu_summary_df = pd.DataFrame()
         bu_summary_df['Name'] = final_df['Name']
         bu_summary_df['Total Clocked'] = final_df['Total_Weekly_Clocked_Hrs'].apply(format_hm)
@@ -954,7 +956,7 @@ if time_file and ops_file:
         bu_summary_df = pd.concat([bu_summary_df, total_row], ignore_index=True)
         display_dfs['Weekly'] = bu_summary_df
 
-        # Day mapping pivots definitions
+        # Weekday matrices loops mapped definitions
         for day in days:
             if f'{day}_Clocked_Hrs' in final_df.columns and f'{day}_Job_Hrs' in final_df.columns:
                 final_df[day + '_Diff_Hrs'] = final_df[day + '_Clocked_Hrs'] - final_df[day + '_Job_Hrs']
@@ -976,7 +978,7 @@ if time_file and ops_file:
             if f'{d} Jobs' in final_df.columns: blank_cols.extend([f'{d} Jobs', f'{d} Clocked', f'{d} Job Time', f'{d} Diff'])
         display_dfs['Manager'] = final_df[blank_cols]
 
-        # Render layout interfaces tabs view
+        # Render layout tab sheets interfaces
         tab_names = ["Weekly Summary", "Manager Overview", "Individual Tech Report", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "🧪 Test Section"]
         tabs = st.tabs(tab_names)
         
@@ -1145,7 +1147,7 @@ if time_file and ops_file:
             # ⭐ Lowe's Combined Cost Performance Matrix
             st.markdown("<br><hr><h3>📦 Lowe's Combined Cost Performance Matrix</h3>", unsafe_allow_html=True)
             st.markdown("*(Isolates combined material and service expenses metrics and maps accurate Net Profit thresholds by sector inclusive of contractor fields)*")
-            st.dataframe(show_cc, use_container_width=True)
+            st.table(show_cc)
             create_copy_button(show_cc, "product_vs_service_cost_breakdown")
             
             # --- RENDER DISPATCH METRICS & SCORECARDS IN THE WEEKLY SUMMARY CANVAS ---
