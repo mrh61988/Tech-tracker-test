@@ -179,7 +179,7 @@ def check_late(row):
     fp = row['First_Punch']
     status = row['First_Status']
     if pd.isna(fp): return False
-    if status in ['On The Way', 'Lowes Store']:
+    if status in ['Lowes Store', 'On The Way']:
         return fp.hour >= 8
     elif status == 'In Progress':
         return fp.hour > 8 or (fp.hour == 8 and fp.minute >= 30)
@@ -571,7 +571,7 @@ ops_file = st.sidebar.file_uploader("Upload Lowes Ops Export (CSV)", type=['csv'
 if time_file and ops_file:
     try:
         CORE_TECHS = ['Bryan Pickett', 'Edward Lopez', 'Erik Tange', 'Matt Schlosser', 'Michael Owens', 'Nathan Smith', 'Sean Marble', 'Tanner LaForge']
-        display_dfs = {} # Clean instantiation blocks any trailing weekday compilation bugs
+        display_dfs = {} # Early initialization block blocks downstream NameErrors
         
         # --- 1. Raw Read of Ops Data ---
         ops_bytes = ops_file.getvalue()
@@ -606,6 +606,24 @@ if time_file and ops_file:
         ops_df['Day_of_Week'] = ops_df['Job_Date_Parsed'].dt.day_name().str[:3]
         ops_df['Short_Date'] = ops_df['Job_Date_Parsed'].dt.strftime('%m-%d-%Y')
 
+        # === FIXED CRITICAL BUG: Earliest_Status DEFINED AT HEAD LAYER SO CHRONOLOGY BALANCES EXPLICITLY ===
+        def get_first_status_col(row):
+            min_t = pd.NaT
+            best_c = 'Unknown'
+            for c in available_ts_dt_cols:
+                t = row[c]
+                if pd.notna(t):
+                    if pd.isna(min_t) or t < min_t:
+                        min_t = t
+                        best_c = c
+            return best_c
+        ops_df['Earliest_Status_Col'] = ops_df.apply(get_first_status_col, axis=1)
+        def map_status(col):
+            if 'Store' in str(col): return 'Lowes Store'
+            if 'Way' in str(col): return 'On The Way'
+            return 'In Progress'
+        ops_df['Earliest_Status'] = ops_df['Earliest_Status_Col'].apply(map_status)
+
         # --- 2. Raw Read of Timesheet Data ---
         time_bytes = time_file.getvalue()
         is_standard_time_csv = False
@@ -625,7 +643,7 @@ if time_file and ops_file:
             ["All Uploaded Data", "This Week (Mon-Sun)", "Last Week (Mon-Sun)", "This Month", "Last Month", "Custom Date Range"]
         )
 
-        today = datetime.date(2026, 5, 25) # Pivot contextual tracking anchor matches database constraints
+        today = datetime.date(2026, 5, 25) # Standard operational context timeline anchor
         start_date, end_date = None, None
 
         if date_filter_option == "This Week (Mon-Sun)":
@@ -651,7 +669,7 @@ if time_file and ops_file:
             start_dt = pd.to_datetime(start_date)
             end_dt = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
             
-            # Direct slicing across dataframes enforces clean downstream syncs
+            # Slice logs prior to pivot and aggregation frameworks executing
             ops_df = ops_df[(ops_df['Job_Date_Parsed'] >= start_dt) & (ops_df['Job_Date_Parsed'] <= end_dt)]
             if is_standard_time_csv:
                 sample_df = sample_df[(sample_df['Clock_In_dt'] >= start_dt) & (sample_df['Clock_In_dt'] <= end_dt)]
@@ -695,13 +713,11 @@ if time_file and ops_file:
         time_df = time_df[time_df['Name'].isin(CORE_TECHS)]
         days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
-        # --- 5. Establish 'unexploded_ops' Framework Early ---
+        # --- 5. Process Unexploded Framework Layout Vectors ---
         unexploded_ops = ops_df.copy()
         raw_unsplit_volume = unexploded_ops['Total Invoice Amount'].sum()
 
-        # =========================================================================================
-        # 🏗️ INITIALIZE 'df_macro_pay' AT THE TOP LAYER TO PREVENT NAMERROR EXCEPTIONS
-        # =========================================================================================
+        # === INITIALIZED EARLY AT HIGHEST LAYER TO PREVENT NAMERROR ENGINES COMPILATION BLOCKS ===
         df_macro_pay = unexploded_ops.copy()
         df_macro_pay['Tech_Count'] = df_macro_pay['Assigned Team Members'].apply(lambda x: len([m.strip() for m in str(x).split(',') if m.strip()]))
         df_macro_pay['Is_Contractor'] = df_macro_pay['Assigned Team Members'].apply(check_contractor)
@@ -744,7 +760,7 @@ if time_file and ops_file:
             delayed_launches_df = bounds_df.copy()
             ts_eod = pd.DataFrame(columns=['Assigned Team Members', 'Short_Date', 'Actual_Clock_Out'])
 
-        # --- 7. Explode Target Multi-Tech Log Rows ---
+        # --- 7. Explode Target Crew Splits Workload Rows ---
         exploded_rows = []
         for idx, row in ops_df.iterrows():
             raw_members = [m.strip() for m in str(row['Assigned Team Members']).split(',') if m.strip()]
@@ -818,7 +834,7 @@ if time_file and ops_file:
             sean_penalty_value = 0.0
         st.session_state['sean_absence_penalty_global'] = sean_penalty_value
 
-        # --- 9. Compute Metric Goals and Allocation Proportional Baselines ---
+        # --- 9. Compute Task Goals and Field Efficiencies Matrix ---
         final_df['LSI_Goal_Hrs'] = final_df['Simple_Installs_Count'] * 2.0
         final_df['WH_Goal_Hrs'] = final_df['Water_Heaters_Count'] * 3.5
         final_df['Total_Goal_Hrs'] = final_df['LSI_Goal_Hrs'] + final_df['WH_Goal_Hrs']
@@ -839,14 +855,13 @@ if time_file and ops_file:
         final_df['Simple Installs Eff'] = final_df['LSI_Eff_Raw'].apply(lambda x: f"{x:.1f}%")
         final_df['Water Heaters Eff'] = final_df['WH_Eff_Raw'].apply(lambda x: f"{x:.1f}%")
 
-        # --- 10. Compute Payroll & Wage Burdens on Exploded Datasets ---
+        # --- 10. Compute Payroll & Wage Cost Allocation Layouts ---
         rev_per_hour_df_calc = final_df.copy()
         rev_per_hour_df_calc['Assumed Pay Amount'] = rev_per_hour_df_calc.apply(get_adjusted_table_pay, axis=1)
         pay_mapping_dict = dict(zip(rev_per_hour_df_calc['Name'], rev_per_hour_df_calc['Assumed Pay Amount']))
         
         ops_df['Computed_Row_Pay'] = ops_df['Name'].map(pay_mapping_dict).fillna(0.0)
         
-        # FIXED PROACTIVE FIX: Generates and merges field workload denominators to avoid 'Tech_Total_Work_Hrs' missing metrics
         tech_total_field_hrs = ops_df.groupby('Name')['Total_Job_Time_Hours'].sum().reset_index().rename(columns={'Total_Job_Time_Hours': 'Tech_Total_Work_Hrs'})
         ops_df = pd.merge(ops_df, tech_total_field_hrs, on='Name', how='left')
         
@@ -857,7 +872,7 @@ if time_file and ops_file:
             ops_df['Total Invoice Amount'] * 0.33, ops_df['Allocated_Job_Pay']
         )
         
-        # --- 11. Finalize Labor Payloads Back Onto Pre-Initialized Macro Frames ---
+        # --- 11. Finalize Labor Payloads Back Onto Macro Budget Frameworks ---
         df_macro_pay['Logged_Time_Pay'] = df_macro_pay['#ID'].map(ops_df.groupby('#ID')['Allocated_Job_Pay'].sum().to_dict()).fillna(0.0)
         df_macro_pay['Assumed_Labor_Payload'] = np.where(
             (df_macro_pay['Business Unit'] == 'Lowes - Simple Installs') & df_macro_pay['Is_Contractor'],
@@ -866,7 +881,7 @@ if time_file and ops_file:
         )
         df_macro_pay['Net_Profit_Raw'] = df_macro_pay['Total Invoice Amount'] - df_macro_pay['Combined_Lowe_Costs'] - df_macro_pay['Assumed_Labor_Payload']
 
-        # --- 12. Compile Executive Dashboard Visualization Summaries ---
+        # --- 12. Compile Financial and Cost Summary Matrices ---
         bu_gross_rev = unexploded_ops.groupby('Business Unit')['Total Invoice Amount'].sum().reset_index()
         bu_gross_rev.columns = ['Business Unit', 'Gross Invoiced Revenue Raw']
         total_macro_sum = bu_gross_rev['Gross Invoiced Revenue Raw'].sum() if bu_gross_rev['Gross Invoiced Revenue Raw'].sum() > 0 else 1.0
@@ -883,7 +898,6 @@ if time_file and ops_file:
         bu_financial_matrix['Pay % of Revenue'] = bu_financial_matrix['Pay % of Revenue'].apply(lambda x: f"{x:.1f}%")
         bu_financial_matrix['Gross Invoiced Revenue'] = bu_financial_matrix['Gross Invoiced Revenue Raw'].apply(lambda x: f"${x:,.2f}")
 
-        # Proactive layout patch ensures cost summaries compile correctly
         cc_matrix = df_macro_pay.groupby('Business Unit').agg(
             Jobs=('#ID', 'count'), Gross_Invoiced_Raw=('Total Invoice Amount', 'sum'),
             Combined_Cost_Total_Raw=('Combined_Lowe_Costs', 'sum'), Assumed_Labor_Payload_Raw=('Assumed_Labor_Payload', 'sum'),
@@ -905,7 +919,54 @@ if time_file and ops_file:
         cc_matrix['Net Profit ($)'] = cc_matrix['Net_Profit_Total_Raw'].apply(lambda x: f"${x:,.2f}")
         show_cc = cc_matrix[['Business Unit', 'Jobs', 'Gross Invoiced Revenue', 'Total Combined Cost', 'Cost Ratio % vs Rev', 'Tech Wage Burden', 'Net Profit ($)', 'Net Profit (%)']].rename(columns={'Jobs': 'Jobs Assigned'})
 
-        # --- 13. Map Weekday Metrics Reference Log Frames ---
+        # --- 13. Map Dynamic Group Summaries Totals Card Row ---
+        bu_summary_df = pd.DataFrame()
+        bu_summary_df['Name'] = final_df['Name']
+        bu_summary_df['Total Clocked'] = final_df['Total_Weekly_Clocked_Hrs'].apply(format_hm)
+        bu_summary_df['Total Jobs'] = final_df['Total_Weekly_Job_Count'].astype(int)
+        bu_summary_df['LSI Jobs'] = final_df['Simple_Installs_Count'].astype(int)
+        bu_summary_df['LSI Tracked Hours'] = final_df['Simple Installs']
+        bu_summary_df['LSI Efficiency'] = final_df['Simple Installs Eff']
+        bu_summary_df['WH Jobs'] = final_df['Water_Heaters_Count'].astype(int)
+        bu_summary_df['WH Tracked Hours'] = final_df['Water Heaters']
+        bu_summary_df['WH Efficiency'] = final_df['Water Heaters Eff']
+        bu_summary_df['Total Efficiency'] = np.where(final_df['Total_Weekly_Clocked_Hrs'] > 0, (final_df['Total_Weekly_Job_Hrs'] / final_df['Total_Weekly_Clocked_Hrs']) * 100, 0.0)
+        bu_summary_df['Total Efficiency'] = bu_summary_df['Total Efficiency'].apply(lambda x: f"{x:.1f}%")
+        bu_summary_df['Total Unallocated Hours'] = final_df['Total_Weekly_Diff_Hrs'].apply(format_hm)
+
+        total_clocked_sum = final_df['Total_Weekly_Clocked_Hrs'].sum()
+        total_jobs_sum = final_df['Total_Weekly_Job_Count'].sum()
+        total_lsi_jobs_sum = final_df['Simple_Installs_Count'].sum()
+        total_lsi_hrs_sum = final_df['Simple_Installs_Hrs'].sum()
+        total_wh_jobs_sum = final_df['Water_Heaters_Count'].sum()
+        total_wh_hrs_sum = final_df['Water_Heaters_Hrs'].sum()
+        total_job_hrs_sum = final_df['Total_Weekly_Job_Hrs'].sum()
+        total_diff_hrs_sum = final_df['Total_Weekly_Diff_Hrs'].sum()
+        
+        total_lsi_goal_hrs = final_df['Assumed_LSI_Clocked'].sum()
+        total_wh_goal_hrs = final_df['Assumed_WH_Clocked'].sum()
+        
+        blended_lsi_eff = (total_lsi_hrs_sum / total_lsi_goal_hrs * 100) if total_lsi_goal_hrs > 0 else 0.0
+        blended_wh_eff = (total_wh_hrs_sum / total_wh_goal_hrs * 100) if total_wh_goal_hrs > 0 else 0.0
+        blended_total_eff = (total_job_hrs_sum / total_clocked_sum * 100) if total_clocked_sum > 0 else 0.0
+        
+        total_row = pd.DataFrame([{
+            'Name': 'TOTAL DIVISION',
+            'Total Clocked': format_hm(total_clocked_sum),
+            'Total Jobs': int(total_jobs_sum),
+            'LSI Jobs': int(total_lsi_jobs_sum),
+            'LSI Tracked Hours': format_hm(total_lsi_hrs_sum),
+            'LSI Efficiency': f"{blended_lsi_eff:.1f}%",
+            'WH Jobs': int(total_wh_jobs_sum),
+            'WH Tracked Hours': format_hm(total_wh_hrs_sum),
+            'WH Efficiency': f"{blended_wh_eff:.1f}%",
+            'Total Efficiency': f"{blended_total_eff:.1f}%",
+            'Total Unallocated Hours': format_hm(total_diff_hrs_sum)
+        }])
+        bu_summary_df = pd.concat([bu_summary_df, total_row], ignore_index=True)
+        display_dfs['Weekly'] = bu_summary_df
+
+        # --- 14. Synchronize Weekday Breakdown Logs Matrix ---
         for day in days:
             if f'{day}_Clocked_Hrs' in final_df.columns and f'{day}_Job_Hrs' in final_df.columns:
                 final_df[day + '_Diff_Hrs'] = final_df[day + '_Clocked_Hrs'] - final_df[day + '_Job_Hrs']
@@ -927,7 +988,7 @@ if time_file and ops_file:
             if f'{d} Jobs' in final_df.columns: blank_cols.extend([f'{d} Jobs', f'{d} Clocked', f'{d} Job Time', f'{d} Diff'])
         display_dfs['Manager'] = final_df[blank_cols]
 
-        # --- 14. Render Multi-Tab Output Matrices ---
+        # --- 15. Mount Tab Interfaces Layout Sheet Objects ---
         tab_names = ["Weekly Summary", "Manager Overview", "Individual Tech Report", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "🧪 Test Section"]
         tabs = st.tabs(tab_names)
         
@@ -941,7 +1002,6 @@ if time_file and ops_file:
             </div>
             """, height=45)
 
-            # === HEADERS: OPERATIONAL METRICS EXECUTIVE SCORECARD ===
             st.markdown("### 🏢 Division Operational Health & Productivity Scorecard")
             
             div_health_col1, div_health_col2, div_health_col3, div_health_col4 = st.columns(4)
@@ -1228,7 +1288,6 @@ if time_file and ops_file:
                     st.markdown("**📈 Pay Ratio per Clocked Hour**")
                     rev_per_hour_df = final_df.copy()
                     rev_per_hour_df['Total Clocked'] = rev_per_hour_df['Total_Weekly_Clocked_Hrs'].apply(format_hm)
-                    rev_per_hour_df['Total Jobs'] = rev_per_hour_df['Total_Weekly_Job_Count'].astype(int)
                     rev_per_hour_df['Total Assigned Value'] = rev_per_hour_df['Total_Assigned_Revenue'].apply(lambda x: f"${x:,.2f}")
                     
                     rev_per_hour_df['Assumed Pay Amount'] = rev_per_hour_df.apply(get_adjusted_table_pay, axis=1)
@@ -1340,7 +1399,7 @@ if time_file and ops_file:
                     st.dataframe(pd.DataFrame(ot_audit_rows), use_container_width=True)
                     create_copy_button(pd.DataFrame(ot_audit_rows), "overtime_roi_auditor")
                 else:
-                    st.success("✅ Zero hourly technicians incurred premium overtime thresholds during this invoice cycle.")
+                    st.success("¼ Zero hourly technicians incurred premium overtime thresholds during this invoice cycle.")
 
             if "🏆 Single-Job \"Whale Alert\" Revenue Leaderboard" in test_choices:
                 st.markdown("### **🏆 Single-Job \"Whale Alert\" Revenue Leaderboard**")
@@ -1412,8 +1471,8 @@ if time_file and ops_file:
                     create_copy_button(final_yield_df, "geographic_revenue_yield_drive_hour")
                 else: st.info("Location Address column missing from raw ops datasets.")
 
-            if "Consultation Tracker." in date_filter_option or "漏 End-of-Day (EOD) Payroll Slippage Auditor" in test_choices:
-                pass # Maintained for index backward constraints mappings
+            if "Consultation Tracker." in date_filter_option or "¼ End-of-Day (EOD) Payroll Slippage Auditor" in test_choices:
+                pass 
 
             if "🚛 End-of-Day (EOD) Payroll Slippage Auditor" in test_choices:
                 st.markdown("### **🚛 End-of-Day (EOD) Payroll Slippage Auditor**")
