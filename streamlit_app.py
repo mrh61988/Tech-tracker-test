@@ -643,7 +643,7 @@ if time_file and ops_file:
             ["All Uploaded Data", "This Week (Mon-Sun)", "Last Week (Mon-Sun)", "This Month", "Last Month", "Custom Date Range"]
         )
 
-        today = datetime.date(2026, 5, 25) 
+        today = datetime.date(2026, 5, 25) # Standard operational context timeline anchor
         start_date, end_date = None, None
 
         if date_filter_option == "This Week (Mon-Sun)":
@@ -709,10 +709,12 @@ if time_file and ops_file:
             for col in days_order + ['Total_Weekly']: time_df[col + '_Clocked_Hrs'] = time_df[col].apply(parse_hm)
             time_df['Days_Worked'] = (time_df[[f'{d}_Clocked_Hrs' for d in days_order]] > 0).sum(axis=1)
         
-        time_df = time_df[time_df['Name'].isin(CORE_TECHS)]
+        # Base template guarantees zero core row loss inside matrix pipeline
+        base_tech_template = pd.DataFrame({'Name': CORE_TECHS})
+        time_df = pd.merge(base_tech_template, time_df, on='Name', how='left').fillna(0)
         days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
-        # --- 5. Establish unexploded frameworks early ---
+        # --- 5. Process Unexploded Framework Layout Vectors ---
         unexploded_ops = ops_df.copy()
         raw_unsplit_volume = unexploded_ops['Total Invoice Amount'].sum()
 
@@ -808,13 +810,12 @@ if time_file and ops_file:
         daily_route['Drive %'] = (daily_route['Drive_Time_Hrs'] / daily_route['Total_Job_Time_Hours']) * 100
         daily_route['Name'] = daily_route['Assigned Team Members']
         
-        final_df = pd.merge(time_df, job_time_pivot, on='Name', how='left').fillna(0)
+        # FIXED BUG: Use Master templates instead of plain left inner limits to secure zero row-dropping anomalies
+        final_df = pd.merge(base_tech_template, time_df, on='Name', how='left').fillna(0)
+        final_df = pd.merge(final_df, job_time_pivot, on='Name', how='left').fillna(0)
         final_df = pd.merge(final_df, job_count_pivot, on='Name', how='left').fillna(0)
-        if not bu_pivot.empty: final_df = pd.merge(final_df, bu_pivot[['Name', 'Simple_Installs_Hrs', 'Water_Heaters_Hrs', 'Simple_Installs_Count', 'Water_Heaters_Count']], on='Name', how='left').fillna(0)
-        else:
-            final_df['Simple_Installs_Hrs'] = final_df['Water_Heaters_Hrs'] = 0.0
-            final_df['Simple_Installs_Count'] = final_df['Water_Heaters_Count'] = 0
-            
+        final_df = pd.merge(final_df, bu_pivot, on='Name', how='left').fillna(0)
+        
         tech_rev_agg = ops_df.groupby('Name')['Total Invoice Amount'].sum().reset_index()
         tech_rev_agg.columns = ['Name', 'Total_Assigned_Revenue']
         final_df = pd.merge(final_df, tech_rev_agg, on='Name', how='left').fillna(0.0)
@@ -879,7 +880,7 @@ if time_file and ops_file:
         )
         df_macro_pay['Net_Profit_Raw'] = df_macro_pay['Total Invoice Amount'] - df_macro_pay['Combined_Lowe_Costs'] - df_macro_pay['Assumed_Labor_Payload']
 
-        # === FIXED DEFINITION ARRAYS MOUNTED ON MATRIX SECURELY TO STOP EXCEPTION BUGS ===
+        # === COMPOSITE ALLOCATED DEFINED METRICS AND PAY RATIOS SECURED ===
         total_assumed_pay_adjusted = max(0.0, df_macro_pay['Assumed_Labor_Payload'].sum() - sean_penalty_value)
         pay_ratio_pct_adjusted = (total_assumed_pay_adjusted / raw_unsplit_volume * 100) if raw_unsplit_volume > 0 else 0.0
 
@@ -1004,6 +1005,7 @@ if time_file and ops_file:
             </div>
             """, height=45)
 
+            # === HEADERS: OPERATIONAL METRICS EXECUTIVE SCORECARD ===
             st.markdown("### 🏢 Division Operational Health & Productivity Scorecard")
             
             div_health_col1, div_health_col2, div_health_col3, div_health_col4 = st.columns(4)
@@ -1085,7 +1087,7 @@ if time_file and ops_file:
             
             sort_pane_col, filter_pane_col = st.columns(2)
             with filter_pane_col:
-                selected_bu_filter = st.selectbox("Filter Performance Register By Line of Business:", ["All Sectors", "Lowes - Water Heaters", "Lowes - Simple Installs"], index=1, key="bu_perf_filter_matrix")
+                st.selectbox("Filter Performance Register By Line of Business:", ["All Sectors", "Lowes - Water Heaters", "Lowes - Simple Installs"], index=1, key="bu_perf_filter_matrix")
             with sort_pane_col:
                 selected_sort_choice = st.selectbox("Sort Itemized Register Results By:", ["Highest Net Profit", "Lowest Net Profit", "Highest Gross Invoice", "Highest Profit Margin %", "Job ID"], index=3, key="sorting_perf_matrix")
                 
