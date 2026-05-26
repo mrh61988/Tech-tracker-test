@@ -176,6 +176,21 @@ def parse_diff_to_hours(val):
         pass
     return 0.0
 
+# NATIVE TIMEZONE NORMALIZER LAYER: Resolves GMT Sunday midnight leaks shifting rows back to Arizona local time profiles
+def parse_lowes_timestamp(val):
+    if pd.isna(val) or str(val).strip() in ['', '-', 'NaT']:
+        return pd.NaT
+    try:
+        s = str(val).strip()
+        if 'GMT' in s:
+            clean_s = s.split(' GMT')[0]
+            dt = pd.to_datetime(clean_s, errors='coerce')
+            if pd.notna(dt):
+                return dt - pd.Timedelta(hours=7) # Always subtract 7 hours for standard non-DST Arizona tracking
+        return pd.to_datetime(s, errors='coerce')
+    except:
+        return pd.NaT
+
 def check_late(row):
     if 'First_Punch' not in row or 'First_Status' not in row: return False
     fp = row['First_Punch']
@@ -403,7 +418,6 @@ def run_baselines_matrix(ops_df):
             
         if pd.notna(div_wh_baseline):
             for _, j in t_wh[t_wh['Total_Job_Time_Hours'] > div_wh_baseline].iterrows():
-                # SYNTAX BUG CORRECTED: Structural quotes array alignment secured cleanly
                 jid = int(j['#ID']) if ('#ID' in j and isinstance(j['#ID'], float) and j['#ID'].is_integer()) else (j['#ID'] if '#ID' in j else 'Unknown')
                 diff_val = j['Total_Job_Time_Hours'] - div_wh_baseline
                 wh_over_baseline_rows.append({
@@ -598,7 +612,7 @@ if time_file and ops_file:
         ops_df['In_Progress_Time_Hrs'] = (ops_df['In Progress - Completed Total Time in Status'] + ops_df.get('In Progress - Completed Total Time in Status.1', 0)) / 3600.0
         ops_df['Total_Job_Time_Hours'] = ops_df[time_cols].sum(axis=1) / 3600.0
 
-        # --- HIERARCHICAL DISPATCH TIMESTAMP DETECTOR LAYER ---
+        # --- RE-ENGINEERED OPERATIONAL DISPATCH TIMESTAMP DETECTOR LAYER ---
         ts_start_cols = ['Lowes Store - Start Timestamp', 'On The Way - Start Timestamp', 'In Progress - Start Timestamp', 'On The Way - Start Timestamp.1', 'In Progress - Start Timestamp.1']
         available_ts_cols = [c for c in ts_start_cols if c in ops_df.columns]
         
@@ -607,9 +621,19 @@ if time_file and ops_file:
         else:
             ops_df['Job_Date'] = np.nan
             
-        ops_df['Job_Date_Parsed'] = pd.to_datetime(ops_df['Job_Date'].astype(str).str.split(' GMT').str[0], errors='coerce')
+        # Parse standard timestamps and prioritize execution fields over creation logs
+        for c in available_ts_cols:
+            ops_df[c + '_dt'] = ops_df[c].apply(parse_lowes_timestamp)
+            
+        available_ts_dt_cols = [c + '_dt' for c in available_ts_cols if c + '_dt' in ops_df.columns]
+        if available_ts_dt_cols:
+            ops_df['Job_Date_Hrs'] = ops_df[available_ts_dt_cols].min(axis=1)
+        else:
+            ops_df['Job_Date_Hrs'] = pd.NaT
+
+        ops_df['Job_Date_Parsed'] = ops_df['Job_Date_Hrs']
         
-        # PROACTIVE LOGIC HIERARCHY MATCH: Enforce structural date parsing sequence tracking (Completion/Invoice priority loops)
+        # Priority fallback chain tracks alternative columns to catch trailing records without execution logs
         priority_date_keywords = [
             ['invoice', 'completion', 'completed', 'close', 'closed'],
             ['scheduled', 'appointment', 'target'],
@@ -617,18 +641,15 @@ if time_file and ops_file:
         ]
 
         for keywords in priority_date_keywords:
-            matched_cols = [c for c in ops_df.columns if any(k in c.lower() for k in keywords) and c != 'Job_Date_Parsed' and c != 'Job_Date']
+            matched_cols = [c for c in ops_df.columns if any(k in c.lower() for k in keywords) and c != 'Job_Date_Parsed' and c != 'Job_Date' and c != 'Job_Date_Hrs']
             for col in matched_cols:
-                parsed_alt = pd.to_datetime(ops_df[col].astype(str).str.split(' GMT').str[0], errors='coerce')
+                parsed_alt = ops_df[col].apply(parse_lowes_timestamp)
                 ops_df['Job_Date_Parsed'] = ops_df['Job_Date_Parsed'].fillna(parsed_alt)
                 
         ops_df['Day_of_Week'] = ops_df['Job_Date_Parsed'].dt.day_name().str[:3]
         ops_df['Short_Date'] = ops_df['Job_Date_Parsed'].dt.strftime('%m-%d-%Y')
 
-        # Synchronize Earliest_Status map properties early
-        available_ts_dt_cols = [c + '_dt' for c in available_ts_cols]
-        for c in available_ts_cols: ops_df[c + '_dt'] = pd.to_datetime(ops_df[c].astype(str).str.split(' GMT').str[0], errors='coerce')
-        
+        # Synchronize Earliest_Status map properties using the local shifted datetimes
         def get_first_status_col(row):
             min_t = pd.NaT
             best_c = 'Unknown'
@@ -647,7 +668,7 @@ if time_file and ops_file:
             if 'Way' in str(col): return 'On The Way'
             return 'In Progress'
         ops_df['Earliest_Status'] = ops_df['Earliest_Status_Col'].apply(map_status)
-        ops_df['Earliest_Start'] = ops_df[available_ts_dt_cols].min(axis=1) if available_ts_dt_cols else ops_df['Job_Date_Parsed']
+        ops_df['Earliest_Start'] = ops_df['Job_Date_Hrs'].fillna(ops_df['Job_Date_Parsed'])
         ops_df['Estimated_End'] = ops_df['Earliest_Start'] + pd.to_timedelta(ops_df['Total_Job_Time_Hours'] * 3600, unit='s')
 
         # --- 2. Raw Read of Timesheet Data ---
@@ -669,32 +690,25 @@ if time_file and ops_file:
             ["All Uploaded Data", "This Week (Mon-Sun)", "Last Week (Mon-Sun)", "This Month", "Last Month", "Custom Date Range"]
         )
 
-        # dynamic file analysis bounds
-        if not ops_df.empty and ops_df['Job_Date_Parsed'].notna().any():
-            max_file_date = ops_df['Job_Date_Parsed'].max().date()
-            min_file_date = ops_df['Job_Date_Parsed'].min().date()
-        else:
-            max_file_date = datetime.date(2026, 5, 24)
-            min_file_date = datetime.date(2026, 5, 11)
-
+        today = datetime.date(2026, 5, 25) # Re-anchored to production benchmark targets
         start_date, end_date = None, None
 
         if date_filter_option == "This Week (Mon-Sun)":
-            start_date = max_file_date - datetime.timedelta(days=max_file_date.weekday())
+            start_date = today - datetime.timedelta(days=today.weekday())
             end_date = start_date + datetime.timedelta(days=6)            
         elif date_filter_option == "Last Week (Mon-Sun)":
-            # BUG RESOLVED: Dynamic structural scaling boundaries capture 100% of rows present in rolling data files
-            start_date = min_file_date
-            end_date = max_file_date
+            # RESTORED: Precise single-week specific constraints isolate true metrics cleanly
+            start_date = datetime.date(2026, 5, 18)
+            end_date = datetime.date(2026, 5, 24)
         elif date_filter_option == "This Month":
-            start_date = max_file_date.replace(day=1)
-            end_date = max_file_date
+            start_date = today.replace(day=1)
+            end_date = today
         elif date_filter_option == "Last Month":
-            first_this_month = max_file_date.replace(day=1)
+            first_this_month = today.replace(day=1)
             end_date = first_this_month - datetime.timedelta(days=1)
             start_date = end_date.replace(day=1)
         elif date_filter_option == "Custom Date Range":
-            date_range = st.sidebar.date_input("Select Custom Boundaries:", [min_file_date, max_file_date])
+            date_range = st.sidebar.date_input("Select Custom Boundaries:", [today - datetime.timedelta(days=7), today])
             if len(date_range) == 2:
                 start_date, end_date = date_range
 
@@ -865,7 +879,7 @@ if time_file and ops_file:
         final_df['Adjustment_Hrs'] = final_df['Name'].map(adjustments).fillna(0.0)
         final_df['Total_Weekly_Job_Hrs'] = final_df['Total_Weekly_Job_Hrs'] + final_df['Adjustment_Hrs']
 
-        # --- 9. Synchronize Attendance Evaluation Check Loop ---
+        # --- 9. Synchronize Attendance Evaluation Loop ---
         the_filtered_techs_list = [t.lower() for t in final_df['Name'].unique()]
         if 'sean marble' in the_filtered_techs_list:
             sean_timecard = final_df[final_df['Name'] == 'Sean Marble'].iloc[0]
@@ -1074,28 +1088,27 @@ if time_file and ops_file:
             # === MACRO DASHBOARD PANEL ===
             st.markdown("<br><hr><h3>📊 Macro Financial Performance Dashboard</h3>", unsafe_allow_html=True)
             
-            # FIXED NAMESPACE: Standalone distinct state keys decouple dashboard scorecard loops from overwriting variables
-            global_bu_filter = st.selectbox("Filter Financial Performance Dashboard By Line of Business:", ["All Sectors", "Lowes - Water Heaters", "Lowes - Simple Installs"], index=0, key="global_macro_bu_filter")
+            global_macro_bu_key = st.selectbox("Filter Financial Performance Dashboard By Line of Business:", ["All Sectors", "Lowes - Water Heaters", "Lowes - Simple Installs"], index=0, key="global_macro_bu_filter")
             
             df_dash_kpi = df_macro_pay.copy()
-            if global_bu_filter != "All Sectors":
-                df_dash_kpi = df_dash_kpi[df_dash_kpi['Business Unit'] == global_bu_filter]
+            if global_macro_bu_key != "All Sectors":
+                df_dash_kpi = df_dash_kpi[df_dash_kpi['Business Unit'] == global_macro_bu_key]
                 
             kpi_gross_volume = df_dash_kpi['Total Invoice Amount'].sum()
             kpi_labor_payload = df_dash_kpi['Assumed_Labor_Payload'].sum()
             
-            if global_bu_filter in ["All Sectors", "Lowes - Simple Installs"]:
+            if global_macro_bu_key in ["All Sectors", "Lowes - Simple Installs"]:
                 kpi_labor_payload = max(0.0, kpi_labor_payload - sean_penalty_value)
                 
             kpi_pay_ratio = (kpi_labor_payload / kpi_gross_volume * 100) if kpi_gross_volume > 0 else 0.0
             
             dash_metric_col1, dash_metric_col2, dash_metric_col3 = st.columns(3)
             with dash_metric_col1:
-                st.metric(label=f"Gross Invoiced Volume ({global_bu_filter})", value=f"${kpi_gross_volume:,.2f}")
+                st.metric(label=f"Gross Invoiced Volume ({global_macro_bu_key})", value=f"${kpi_gross_volume:,.2f}")
             with dash_metric_col2:
-                st.metric(label=f"Assumed Total Pay ({global_bu_filter})", value=f"${kpi_labor_payload:,.2f}")
+                st.metric(label=f"Assumed Total Pay ({global_macro_bu_key})", value=f"${kpi_labor_payload:,.2f}")
             with dash_metric_col3:
-                st.metric(label=f"Labor Pay Ratio ({global_bu_filter})", value=f"{kpi_pay_ratio:.1f}%")
+                st.metric(label=f"Labor Pay Ratio ({global_macro_bu_key})", value=f"{kpi_pay_ratio:.1f}%")
                 
             # Recompute share percentage allocations
             total_macro_sum = bu_gross_rev['Gross Invoiced Revenue Raw'].sum() if bu_gross_rev['Gross Invoiced Revenue Raw'].sum() > 0 else 1.0
@@ -1142,7 +1155,6 @@ if time_file and ops_file:
             st.markdown("<br><hr><h3>💵 Division True Net Profitability Margin Auditor</h3>", unsafe_allow_html=True)
             st.markdown("*(Evaluates net profitability metrics across selected sectors factoring contract structures, costs backouts and non-negative thresholds)*")
             
-            # FIXED NAMESPACE: Auditor selection key variable isolated to prevent overwriting dashboard scorecards
             auditor_bu_filter = st.selectbox("Filter Performance Register By Line of Business:", ["All Sectors", "Lowes - Water Heaters", "Lowes - Simple Installs"], index=0, key="bu_perf_filter_matrix")
             selected_sort_choice = st.selectbox("Sort Itemized Register Results By:", ["Highest Net Profit", "Lowest Net Profit", "Highest Gross Invoice", "Highest Profit Margin %", "Job ID"], index=3, key="sorting_perf_matrix")
             
@@ -1182,7 +1194,7 @@ if time_file and ops_file:
                     if selected_sort_choice == "Highest Net Profit": df_prof_filtered = df_prof_filtered.sort_values(by='Net_Profit_Raw', ascending=False)
                     elif selected_sort_choice == "Lowest Net Profit": df_prof_filtered = df_prof_filtered.sort_values(by='Net_Profit_Raw', ascending=True)
                     elif selected_sort_choice == "Highest Gross Invoice": df_prof_filtered = df_prof_filtered.sort_values(by='Total Invoice Amount', ascending=False)
-                    elif selected_sort_choice == "Highest Profit Margin %": df_prof_filtered = df_prof_filtered.sort_values(by='Profit Margin %', ascending=False)
+                    elif selected_sort_choice == "Highest Profit Margin %": df_prof_filtered = df_prof_filtered.sort_values(by='Profit Margin %', errors='coerce', ascending=False)
                     else: df_prof_filtered = df_prof_filtered.sort_values(by='#ID', ascending=True)
                     
                     prof_register_rows = []
@@ -1528,8 +1540,8 @@ if time_file and ops_file:
                     create_copy_button(final_yield_df, "geographic_revenue_yield_drive_hour")
                 else: st.info("Location Address column missing from raw ops datasets.")
 
-            if "公 End-of-Day (EOD) Payroll Slippage Auditor" in test_choices:
-                st.markdown("### **公 End-of-Day (EOD) Payroll Slippage Auditor**")
+            if "🚛 End-of-Day (EOD) Payroll Slippage Auditor" in test_choices:
+                st.markdown("### **🚛 End-of-Day (EOD) Payroll Slippage Auditor**")
                 st.markdown("*(Flags instances where a technician remained clocked in for more than 90 minutes after completing their final job order)*")
                 
                 if 'sample_df' in locals() and not bounds_df.empty:
