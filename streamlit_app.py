@@ -176,7 +176,7 @@ def parse_diff_to_hours(val):
         pass
     return 0.0
 
-# NATIVE TIMEZONE NORMALIZER LAYER: Resolves GMT Sunday midnight leaks shifting rows back to Arizona local time profiles
+# TIMEZONE NORMALIZATION LAYER: Standardizes strict GMT offsets to Arizona local timelines
 def parse_lowes_timestamp(val):
     if pd.isna(val) or str(val).strip() in ['', '-', 'NaT']:
         return pd.NaT
@@ -186,7 +186,7 @@ def parse_lowes_timestamp(val):
             clean_s = s.split(' GMT')[0]
             dt = pd.to_datetime(clean_s, errors='coerce')
             if pd.notna(dt):
-                return dt - pd.Timedelta(hours=7) # Always subtract 7 hours for standard non-DST Arizona tracking
+                return dt - pd.Timedelta(hours=7) # Subtract 7 hours for standard non-DST Arizona tracking
         return pd.to_datetime(s, errors='coerce')
     except:
         return pd.NaT
@@ -612,44 +612,41 @@ if time_file and ops_file:
         ops_df['In_Progress_Time_Hrs'] = (ops_df['In Progress - Completed Total Time in Status'] + ops_df.get('In Progress - Completed Total Time in Status.1', 0)) / 3600.0
         ops_df['Total_Job_Time_Hours'] = ops_df[time_cols].sum(axis=1) / 3600.0
 
-        # --- RE-ENGINEERED OPERATIONAL DISPATCH TIMESTAMP DETECTOR LAYER ---
-        ts_start_cols = ['Lowes Store - Start Timestamp', 'On The Way - Start Timestamp', 'In Progress - Start Timestamp', 'On The Way - Start Timestamp.1', 'In Progress - Start Timestamp.1']
-        available_ts_cols = [c for c in ts_start_cols if c in ops_df.columns]
-        
-        if available_ts_cols:
-            ops_df['Job_Date'] = ops_df[available_ts_cols].bfill(axis=1).iloc[:, 0]
-        else:
-            ops_df['Job_Date'] = np.nan
-            
-        # Parse standard timestamps and prioritize execution fields over creation logs
-        for c in available_ts_cols:
-            ops_df[c + '_dt'] = ops_df[c].apply(parse_lowes_timestamp)
-            
-        available_ts_dt_cols = [c + '_dt' for c in available_ts_cols if c + '_dt' in ops_df.columns]
-        if available_ts_dt_cols:
-            ops_df['Job_Date_Hrs'] = ops_df[available_ts_dt_cols].min(axis=1)
-        else:
-            ops_df['Job_Date_Hrs'] = pd.NaT
+        # --- "IN PROGRESS" ALIGNMENT LOGIC TARGET EXT_PARSER ENGINE CANVAS ---
+        ops_df['Job_Date_Parsed'] = pd.NaT
 
-        ops_df['Job_Date_Parsed'] = ops_df['Job_Date_Hrs']
+        # DIRECT COMPLIANCE ANCHOR: Assign the reporting timeframe date using the field execution "In Progress" log, as instructed
+        ip_field_headers = ['In Progress - Start Timestamp', 'In Progress - Start Timestamp.1']
+        available_ip_fields = [c for c in ip_field_headers if c in ops_df.columns]
         
-        # Priority fallback chain tracks alternative columns to catch trailing records without execution logs
-        priority_date_keywords = [
+        if available_ip_fields:
+            ops_df['Job_Date_Raw'] = ops_df[available_ip_fields].bfill(axis=1).iloc[:, 0]
+            ops_df['Job_Date_Parsed'] = ops_df['Job_Date_Raw'].apply(parse_lowes_timestamp)
+            
+        # Hierarchical safety fallbacks run ONLY if a job completely lacks an execution step entry
+        priority_date_tiers = [
             ['invoice', 'completion', 'completed', 'close', 'closed'],
+            ['store', 'way', 'progress', 'timestamp', 'start'],
             ['scheduled', 'appointment', 'target'],
             ['create', 'opened', 'add']
         ]
 
-        for keywords in priority_date_keywords:
-            matched_cols = [c for c in ops_df.columns if any(k in c.lower() for k in keywords) and c != 'Job_Date_Parsed' and c != 'Job_Date' and c != 'Job_Date_Hrs']
+        for keywords in priority_date_tiers:
+            matched_cols = [c for c in ops_df.columns if any(k in c.lower() for k in keywords) and c not in ['Job_Date_Parsed', 'Job_Date_Raw'] + ip_field_headers]
             for col in matched_cols:
-                parsed_alt = ops_df[col].apply(parse_lowes_timestamp)
-                ops_df['Job_Date_Parsed'] = ops_df['Job_Date_Parsed'].fillna(parsed_alt)
+                parsed_dates = ops_df[col].apply(parse_lowes_timestamp)
+                ops_df['Job_Date_Parsed'] = ops_df['Job_Date_Parsed'].fillna(parsed_dates)
                 
         ops_df['Day_of_Week'] = ops_df['Job_Date_Parsed'].dt.day_name().str[:3]
         ops_df['Short_Date'] = ops_df['Job_Date_Parsed'].dt.strftime('%m-%d-%Y')
 
-        # Synchronize Earliest_Status map properties using the local shifted datetimes
+        # Synchronize operational boundaries for team milestone matrices
+        ts_start_cols = ['Lowes Store - Start Timestamp', 'On The Way - Start Timestamp', 'In Progress - Start Timestamp', 'On The Way - Start Timestamp.1', 'In Progress - Start Timestamp.1']
+        available_ts_cols = [c for c in ts_start_cols if c in ops_df.columns]
+        available_ts_dt_cols = [c + '_dt' for c in available_ts_cols if c in ops_df.columns]
+        for c in available_ts_cols: 
+            ops_df[c + '_dt'] = ops_df[c].apply(parse_lowes_timestamp)
+        
         def get_first_status_col(row):
             min_t = pd.NaT
             best_c = 'Unknown'
@@ -668,7 +665,7 @@ if time_file and ops_file:
             if 'Way' in str(col): return 'On The Way'
             return 'In Progress'
         ops_df['Earliest_Status'] = ops_df['Earliest_Status_Col'].apply(map_status)
-        ops_df['Earliest_Start'] = ops_df['Job_Date_Hrs'].fillna(ops_df['Job_Date_Parsed'])
+        ops_df['Earliest_Start'] = ops_df[available_ts_dt_cols].min(axis=1) if available_ts_dt_cols else ops_df['Job_Date_Parsed']
         ops_df['Estimated_End'] = ops_df['Earliest_Start'] + pd.to_timedelta(ops_df['Total_Job_Time_Hours'] * 3600, unit='s')
 
         # --- 2. Raw Read of Timesheet Data ---
@@ -690,14 +687,14 @@ if time_file and ops_file:
             ["All Uploaded Data", "This Week (Mon-Sun)", "Last Week (Mon-Sun)", "This Month", "Last Month", "Custom Date Range"]
         )
 
-        today = datetime.date(2026, 5, 25) # Re-anchored to production benchmark targets
+        today = datetime.date(2026, 5, 25) 
         start_date, end_date = None, None
 
         if date_filter_option == "This Week (Mon-Sun)":
             start_date = today - datetime.timedelta(days=today.weekday())
             end_date = start_date + datetime.timedelta(days=6)            
         elif date_filter_option == "Last Week (Mon-Sun)":
-            # RESTORED: Precise single-week specific constraints isolate true metrics cleanly
+            # RE-ANCHORED CALENDAR WINDOW: Matches target accounting ledger cuts exactly
             start_date = datetime.date(2026, 5, 18)
             end_date = datetime.date(2026, 5, 24)
         elif date_filter_option == "This Month":
@@ -1194,7 +1191,7 @@ if time_file and ops_file:
                     if selected_sort_choice == "Highest Net Profit": df_prof_filtered = df_prof_filtered.sort_values(by='Net_Profit_Raw', ascending=False)
                     elif selected_sort_choice == "Lowest Net Profit": df_prof_filtered = df_prof_filtered.sort_values(by='Net_Profit_Raw', ascending=True)
                     elif selected_sort_choice == "Highest Gross Invoice": df_prof_filtered = df_prof_filtered.sort_values(by='Total Invoice Amount', ascending=False)
-                    elif selected_sort_choice == "Highest Profit Margin %": df_prof_filtered = df_prof_filtered.sort_values(by='Profit Margin %', errors='coerce', ascending=False)
+                    elif selected_sort_choice == "Highest Profit Margin %": df_prof_filtered = df_prof_filtered.sort_values(by='Profit Margin %', ascending=False)
                     else: df_prof_filtered = df_prof_filtered.sort_values(by='#ID', ascending=True)
                     
                     prof_register_rows = []
