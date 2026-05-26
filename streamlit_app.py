@@ -20,7 +20,9 @@ st.markdown("""
     /* Hide structural utility blocks, upload buttons, tabs navigation bars, and panels from saved PDFs */
     header { display: none !important; }
     [data-testid="stHeader"] { display: none !important; }
-    [data-testid="stSidebar"] { display: none !important; section[data-testid="stSidebar"] { display: none !important; } [data-testid="stSidebarCollapseButton"] { display: none !important; } }
+    st.sidebar { display: none !important; }
+    [data-testid="stSidebar"] { display: none !important; }
+    [data-testid="stSidebarCollapseButton"] { display: none !important; }
     [data-testid="stFileUploader"] { display: none !important; }
     [data-testid="stSelectbox"] { display: none !important; }
     div[data-baseweb="tab-list"] { display: none !important; }
@@ -606,7 +608,7 @@ if time_file and ops_file:
         ops_df['Day_of_Week'] = ops_df['Job_Date_Parsed'].dt.day_name().str[:3]
         ops_df['Short_Date'] = ops_df['Job_Date_Parsed'].dt.strftime('%m-%d-%Y')
 
-        # Synchronize Earliest_Status prior to filtration blocks
+        # Synchronize Earliest_Status map properties early
         def get_first_status_col(row):
             min_t = pd.NaT
             best_c = 'Unknown'
@@ -643,7 +645,7 @@ if time_file and ops_file:
             ["All Uploaded Data", "This Week (Mon-Sun)", "Last Week (Mon-Sun)", "This Month", "Last Month", "Custom Date Range"]
         )
 
-        today = datetime.date(2026, 5, 25) # Standard operational context timeline anchor
+        today = datetime.date(2026, 5, 25) 
         start_date, end_date = None, None
 
         if date_filter_option == "This Week (Mon-Sun)":
@@ -665,13 +667,14 @@ if time_file and ops_file:
             if len(date_range) == 2:
                 start_date, end_date = date_range
 
+        # BUG RESOLVED: Explicitly safeguard NaT (missing milestone times) from dropping out during weekly query cuts
         if start_date and end_date:
             start_dt = pd.to_datetime(start_date)
             end_dt = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
             
-            ops_df = ops_df[(ops_df['Job_Date_Parsed'] >= start_dt) & (ops_df['Job_Date_Parsed'] <= end_dt)]
+            ops_df = ops_df[((ops_df['Job_Date_Parsed'] >= start_dt) & (ops_df['Job_Date_Parsed'] <= end_dt)) | (ops_df['Job_Date_Parsed'].isna())]
             if is_standard_time_csv:
-                sample_df = sample_df[(sample_df['Clock_In_dt'] >= start_dt) & (sample_df['Clock_In_dt'] <= end_dt)]
+                sample_df = sample_df[((sample_df['Clock_In_dt'] >= start_dt) & (sample_df['Clock_In_dt'] <= end_dt)) | (sample_df['Clock_In_dt'].isna())]
 
         # --- 4. Process Mapped Time Cards Post-Filter ---
         if is_standard_time_csv:
@@ -709,12 +712,12 @@ if time_file and ops_file:
             for col in days_order + ['Total_Weekly']: time_df[col + '_Clocked_Hrs'] = time_df[col].apply(parse_hm)
             time_df['Days_Worked'] = (time_df[[f'{d}_Clocked_Hrs' for d in days_order]] > 0).sum(axis=1)
         
-        # Base template guarantees zero core row loss inside matrix pipeline
+        # Base tech template secures row alignment consistency
         base_tech_template = pd.DataFrame({'Name': CORE_TECHS})
         time_df = pd.merge(base_tech_template, time_df, on='Name', how='left').fillna(0)
         days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
-        # --- 5. Process Unexploded Framework Layout Vectors ---
+        # --- 5. Process Unexploded Framework Layout Vectors Early ---
         unexploded_ops = ops_df.copy()
         raw_unsplit_volume = unexploded_ops['Total Invoice Amount'].sum()
 
@@ -810,7 +813,6 @@ if time_file and ops_file:
         daily_route['Drive %'] = (daily_route['Drive_Time_Hrs'] / daily_route['Total_Job_Time_Hours']) * 100
         daily_route['Name'] = daily_route['Assigned Team Members']
         
-        # FIXED BUG: Use Master templates instead of plain left inner limits to secure zero row-dropping anomalies
         final_df = pd.merge(base_tech_template, time_df, on='Name', how='left').fillna(0)
         final_df = pd.merge(final_df, job_time_pivot, on='Name', how='left').fillna(0)
         final_df = pd.merge(final_df, job_count_pivot, on='Name', how='left').fillna(0)
@@ -821,7 +823,7 @@ if time_file and ops_file:
         final_df = pd.merge(final_df, tech_rev_agg, on='Name', how='left').fillna(0.0)
         final_df['Rev_Per_Clocked_Hr'] = np.where(final_df['Total_Weekly_Clocked_Hrs'] > 0, final_df['Total_Assigned_Revenue'] / final_df['Total_Weekly_Clocked_Hrs'], 0.0)
 
-        # --- 8. Synchronize Attendance Absence Evaluation Check Loop ---
+        # --- 8. Synchronize Attendance Evaluation Loop ---
         sean_timecard = final_df[final_df['Name'] == 'Sean Marble']
         if not sean_timecard.empty:
             sean_row = sean_timecard.iloc[0]
@@ -833,7 +835,7 @@ if time_file and ops_file:
             sean_penalty_value = 0.0
         st.session_state['sean_absence_penalty_global'] = sean_penalty_value
 
-        # --- 9. Compute Metric Goals and Allocation Proportional Baselines ---
+        # --- 9. Compute Metric Goals and Efficiencies ---
         final_df['LSI_Goal_Hrs'] = final_df['Simple_Installs_Count'] * 2.0
         final_df['WH_Goal_Hrs'] = final_df['Water_Heaters_Count'] * 3.5
         final_df['Total_Goal_Hrs'] = final_df['LSI_Goal_Hrs'] + final_df['WH_Goal_Hrs']
@@ -880,7 +882,7 @@ if time_file and ops_file:
         )
         df_macro_pay['Net_Profit_Raw'] = df_macro_pay['Total Invoice Amount'] - df_macro_pay['Combined_Lowe_Costs'] - df_macro_pay['Assumed_Labor_Payload']
 
-        # === COMPOSITE ALLOCATED DEFINED METRICS AND PAY RATIOS SECURED ===
+        # CORE ALLOCATED PIPELINE FIELDS DECLARED ON BASE TIMELINE
         total_assumed_pay_adjusted = max(0.0, df_macro_pay['Assumed_Labor_Payload'].sum() - sean_penalty_value)
         pay_ratio_pct_adjusted = (total_assumed_pay_adjusted / raw_unsplit_volume * 100) if raw_unsplit_volume > 0 else 0.0
 
@@ -1087,7 +1089,7 @@ if time_file and ops_file:
             
             sort_pane_col, filter_pane_col = st.columns(2)
             with filter_pane_col:
-                st.selectbox("Filter Performance Register By Line of Business:", ["All Sectors", "Lowes - Water Heaters", "Lowes - Simple Installs"], index=1, key="bu_perf_filter_matrix")
+                selected_bu_filter = st.selectbox("Filter Performance Register By Line of Business:", ["All Sectors", "Lowes - Water Heaters", "Lowes - Simple Installs"], index=1, key="bu_perf_filter_matrix")
             with sort_pane_col:
                 selected_sort_choice = st.selectbox("Sort Itemized Register Results By:", ["Highest Net Profit", "Lowest Net Profit", "Highest Gross Invoice", "Highest Profit Margin %", "Job ID"], index=3, key="sorting_perf_matrix")
                 
@@ -1474,6 +1476,9 @@ if time_file and ops_file:
                     st.dataframe(final_yield_df, use_container_width=True)
                     create_copy_button(final_yield_df, "geographic_revenue_yield_drive_hour")
                 else: st.info("Location Address column missing from raw ops datasets.")
+
+            if "Consultation Tracker." in date_filter_option or "漏 End-of-Day (EOD) Payroll Slippage Auditor" in test_choices:
+                pass 
 
             if "🚛 End-of-Day (EOD) Payroll Slippage Auditor" in test_choices:
                 st.markdown("### **🚛 End-of-Day (EOD) Payroll Slippage Auditor**")
