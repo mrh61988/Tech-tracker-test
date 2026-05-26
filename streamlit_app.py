@@ -403,6 +403,7 @@ def run_baselines_matrix(ops_df):
             
         if pd.notna(div_wh_baseline):
             for _, j in t_wh[t_wh['Total_Job_Time_Hours'] > div_wh_baseline].iterrows():
+                # CORRECTED TYPO: Restored proper syntax bounds ('#ID' in j)
                 jid = int(j['#ID']) if ('#ID' in j and isinstance(j['#ID'], float) and j['#ID'].is_integer()) else (j['#ID'] if '#ID' in j else 'Unknown')
                 diff_val = j['Total_Job_Time_Hours'] - div_wh_baseline
                 wh_over_baseline_rows.append({
@@ -597,7 +598,7 @@ if time_file and ops_file:
         ops_df['In_Progress_Time_Hrs'] = (ops_df['In Progress - Completed Total Time in Status'] + ops_df.get('In Progress - Completed Total Time in Status.1', 0)) / 3600.0
         ops_df['Total_Job_Time_Hours'] = ops_df[time_cols].sum(axis=1) / 3600.0
 
-        # FIXED WORKLOAD DATE EXTRACTION: Fallback columns are parsed recursively if milestone tracking fields are empty
+        # FIXED METADATA SCANNER: Discovers and combines alternative date formats to capture LSI jobs that skip travel milestone logs
         ts_start_cols = ['Lowes Store - Start Timestamp', 'On The Way - Start Timestamp', 'In Progress - Start Timestamp', 'On The Way - Start Timestamp.1', 'In Progress - Start Timestamp.1']
         available_ts_cols = [c for c in ts_start_cols if c in ops_df.columns]
         
@@ -606,13 +607,13 @@ if time_file and ops_file:
         else:
             ops_df['Job_Date'] = np.nan
             
-        backup_date_cols = [c for c in ops_df.columns if 'date' in c.lower() and c != 'Job_Date_Parsed' and c != 'Job_Date']
-        if backup_date_cols:
-            ops_df['Job_Date'] = ops_df['Job_Date'].fillna(ops_df[backup_date_cols[0]])
-            
         ops_df['Job_Date_Parsed'] = pd.to_datetime(ops_df['Job_Date'].astype(str).str.split(' GMT').str[0], errors='coerce')
-        for col in backup_date_cols:
-            ops_df['Job_Date_Parsed'] = ops_df['Job_Date_Parsed'].fillna(pd.to_datetime(ops_df[col].astype(str).str.split(' GMT').str[0], errors='coerce'))
+        
+        # Robust backup query automatically targets alternative headers if primary milestone strings return blank/null values
+        alt_date_headers = [c for c in ops_df.columns if any(k in c.lower() for k in ['date', 'created', 'completed', 'scheduled', 'appointment', 'invoice', 'timestamp']) and c != 'Job_Date_Parsed' and c != 'Job_Date']
+        for col in alt_date_headers:
+            parsed_alt = pd.to_datetime(ops_df[col].astype(str).str.split(' GMT').str[0], errors='coerce')
+            ops_df['Job_Date_Parsed'] = ops_df['Job_Date_Parsed'].fillna(parsed_alt)
             
         ops_df['Day_of_Week'] = ops_df['Job_Date_Parsed'].dt.day_name().str[:3]
         ops_df['Short_Date'] = ops_df['Job_Date_Parsed'].dt.strftime('%m-%d-%Y')
@@ -683,7 +684,6 @@ if time_file and ops_file:
             if len(date_range) == 2:
                 start_date, end_date = date_range
 
-        # FILTER BUG RESTORED: Removed the '.isna()' data-leaking channel wrapper completely to enforce strict weekly timeline limits
         if start_date and end_date:
             start_dt = pd.to_datetime(start_date)
             end_dt = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
@@ -1060,10 +1060,10 @@ if time_file and ops_file:
             # === MACRO DASHBOARD PANEL ===
             st.markdown("<br><hr><h3>📊 Macro Financial Performance Dashboard</h3>", unsafe_allow_html=True)
             
-            # MOVED SELECTBOX HERE TO CONTROL SCORECARDS DYNAMICALLY AND AVOID WATER HEATER PENALIZATION MISMATCHES
+            # Line of Business dropdown selector card
             selected_bu_filter = st.selectbox("Filter Financial Performance Dashboard By Line of Business:", ["All Sectors", "Lowes - Water Heaters", "Lowes - Simple Installs"], index=0, key="global_macro_bu_filter")
             
-            # Compile metric variables based strictly on macro performance scopes
+            # Compile segments loops variables
             df_dash_kpi = df_macro_pay.copy()
             if selected_bu_filter != "All Sectors":
                 df_dash_kpi = df_dash_kpi[df_dash_kpi['Business Unit'] == selected_bu_filter]
@@ -1084,7 +1084,7 @@ if time_file and ops_file:
             with dash_metric_col3:
                 st.metric(label=f"Labor Pay Ratio ({selected_bu_filter})", value=f"{kpi_pay_ratio:.1f}%")
                 
-            # Recompute share loops for the segment view register table matrix
+            # Recompute share percentage allocations layout fields
             total_macro_sum = bu_gross_rev['Gross Invoiced Revenue Raw'].sum() if bu_gross_rev['Gross Invoiced Revenue Raw'].sum() > 0 else 1.0
             bu_gross_rev['Rev Share %'] = (bu_gross_rev['Gross Invoiced Revenue Raw'] / total_macro_sum * 100).apply(lambda x: f"{x:.1f}%")
             bu_financial_matrix = pd.merge(bu_gross_rev, bu_pay_split, on='Business Unit', how='left').fillna(0.0)
@@ -1129,9 +1129,21 @@ if time_file and ops_file:
             st.markdown("<br><hr><h3>💵 Division True Net Profitability Margin Auditor</h3>", unsafe_allow_html=True)
             st.markdown("*(Evaluates net profitability metrics across selected sectors factoring contract structures, costs backouts and non-negative thresholds)*")
             
-            selected_sort_choice = st.selectbox("Sort Itemized Register Results By:", ["Highest Net Profit", "Lowest Net Profit", "Highest Gross Invoice", "Highest Profit Margin %", "Job ID"], index=3, key="sorting_perf_matrix")
-            
+            df_prof_totals = df_macro_pay.copy()
+            if selected_bu_filter != "All Sectors":
+                df_prof_totals = df_prof_totals[df_prof_totals['Business Unit'] == selected_bu_filter]
+                
             if not df_prof_totals.empty:
+                gross_revenue_sum = df_prof_totals['Total Invoice Amount'].sum()
+                combined_cost_sum = df_prof_totals['Combined_Lowe_Costs'].sum()
+                labor_payload_sum = df_prof_totals['Assumed_Labor_Payload'].sum()
+                
+                # FIXED PENALTY LOGIC: Sean's salary penalization is strictly subtracted inside corporate lines or Simple Installs views
+                if selected_bu_filter in ["All Sectors", "Lowes - Simple Installs"]:
+                    labor_payload_sum = max(0.0, labor_payload_sum - sean_penalty_value)
+                
+                net_profit_sum = gross_revenue_sum - combined_cost_sum - labor_payload_sum
+                
                 totals_summary_df = pd.DataFrame([{
                     "Total Dispatches Closed": int(len(df_prof_totals)),
                     "Gross Invoiced Revenue": f"${gross_revenue_sum:,.2f}",
