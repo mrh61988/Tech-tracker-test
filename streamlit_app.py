@@ -403,7 +403,7 @@ def run_baselines_matrix(ops_df):
             
         if pd.notna(div_wh_baseline):
             for _, j in t_wh[t_wh['Total_Job_Time_Hours'] > div_wh_baseline].iterrows():
-                jid = int(j['#ID']) if ('#ID' in j and isinstance(j['#ID'], float) and j['#ID'].is_integer()) else (j['#ID'] if '#ID' in j else 'Unknown')
+                jid = int(j['#ID']) if ('#ID} in j and isinstance(j['#ID'], float) and j['#ID'].is_integer()) else (j['#ID'] if '#ID' in j else 'Unknown')
                 diff_val = j['Total_Job_Time_Hours'] - div_wh_baseline
                 wh_over_baseline_rows.append({
                     "Technician": tech_name,
@@ -823,7 +823,7 @@ if time_file and ops_file:
         final_df['Rev_Per_Clocked_Hr'] = np.where(final_df['Total_Weekly_Clocked_Hrs'] > 0, final_df['Total_Assigned_Revenue'] / final_df['Total_Weekly_Clocked_Hrs'], 0.0)
 
         # =========================================================================================
-        # 🔧 RESTORED: JOB STATUS TIME ADJUSTMENTS SIDEBAR PARAMETERS INTERFACE NATIVE LAYER
+        # 🔧 JOB STATUS TIME ADJUSTMENTS SIDEBAR INTERFACE NATIVE LAYER
         # =========================================================================================
         st.sidebar.header("🔧 Job Status Time Adjustments")
         global_adj_mins = st.sidebar.number_input("🌍 Global Adj (Minutes)", value=0, step=15, key="global_adj")
@@ -928,8 +928,11 @@ if time_file and ops_file:
         
         cc_matrix['Cost Ratio % vs Rev'] = np.where(cc_matrix['Gross_Invoiced_Raw'] > 0, (cc_matrix['Combined_Cost_Total_Raw'] / cc_matrix['Gross_Invoiced_Raw'] * 100), 0.0)
         cc_matrix['Cost Ratio % vs Rev'] = cc_matrix['Cost Ratio % vs Rev'].apply(lambda x: f"{x:.1f}%")
-        cc_matrix['Net Profit (%)'] = np.where(cc_matrix['Gross_Invoiced_Raw'] > 0, (cc_matrix['Net_Profit_Total_Raw'] / cc_matrix['Gross_Invoiced_Raw'] * 100), 0.0)
-        cc_matrix['Net Profit (%)'] = cc_matrix['Net Profit (%)'].apply(lambda x: f"{x:.1f}%")
+        
+        # FIXED: Core math margin percentage ratio formatting calculation logic restored cleanly
+        cc_matrix['Net_Profit_Pct_Raw'] = np.where(cc_matrix['Gross_Invoiced_Raw'] > 0, (cc_matrix['Net_Profit_Total_Raw'] / cc_matrix['Gross_Invoiced_Raw'] * 100), 0.0)
+        cc_matrix['Net Profit (%)'] = cc_matrix['Net_Profit_Pct_Raw'].apply(lambda x: f"{x:.1f}%")
+        
         cc_matrix['Gross Invoiced Revenue'] = cc_matrix['Gross_Invoiced_Raw'].apply(lambda x: f"${x:,.2f}")
         cc_matrix['Total Combined Cost'] = cc_matrix['Combined_Cost_Total_Raw'].apply(lambda x: f"${x:,.2f}")
         cc_matrix['Tech Wage Burden'] = cc_matrix['Assumed_Labor_Payload_Raw'].apply(lambda x: f"${x:,.2f}")
@@ -1114,9 +1117,9 @@ if time_file and ops_file:
                 combined_cost_sum = df_prof_totals['Combined_Lowe_Costs'].sum()
                 labor_payload_sum = df_prof_totals['Assumed_Labor_Payload'].sum()
                 
-                if selected_bu_filter in ["All Sectors", "Lowes - Water Heaters", "Lowes - Simple Installs"]:
-                    if 'sean marble' in [tech.lower() for tech in ops_df['Name'].unique()]:
-                        labor_payload_sum = max(0.0, labor_payload_sum - sean_penalty_value)
+                # FIXED BUG: Only subtract Sean's salary attendance penalty if viewing corporate totals or Simple Installs explicitly!
+                if selected_bu_filter in ["All Sectors", "Lowes - Simple Installs"]:
+                    labor_payload_sum = max(0.0, labor_payload_sum - sean_penalty_value)
                 
                 net_profit_sum = gross_revenue_sum - combined_cost_sum - labor_payload_sum
                 
@@ -1489,8 +1492,8 @@ if time_file and ops_file:
                     create_copy_button(final_yield_df, "geographic_revenue_yield_drive_hour")
                 else: st.info("Location Address column missing from raw ops datasets.")
 
-            if "🚛 End-of-Day (EOD) Payroll Slippage Auditor" in test_choices:
-                st.markdown("### **🚛 End-of-Day (EOD) Payroll Slippage Auditor**")
+            if "箱 End-of-Day (EOD) Payroll Slippage Auditor" in test_choices:
+                st.markdown("### **箱 End-of-Day (EOD) Payroll Slippage Auditor**")
                 st.markdown("*(Flags instances where a technician remained clocked in for more than 90 minutes after completing their final job order)*")
                 
                 if 'sample_df' in locals() and not bounds_df.empty:
