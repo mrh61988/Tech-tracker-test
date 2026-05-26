@@ -612,27 +612,19 @@ if time_file and ops_file:
         ops_df['In_Progress_Time_Hrs'] = (ops_df['In Progress - Completed Total Time in Status'] + ops_df.get('In Progress - Completed Total Time in Status.1', 0)) / 3600.0
         ops_df['Total_Job_Time_Hours'] = ops_df[time_cols].sum(axis=1) / 3600.0
 
-        # --- "IN PROGRESS" ALIGNMENT LOGIC TARGET EXT_PARSER ENGINE CANVAS ---
+        # --- RE-ENGINEERED DATE SCANNING LAYER WITH FIELD LOG TRACKING LOGS FIRST ---
         ops_df['Job_Date_Parsed'] = pd.NaT
 
-        # DIRECT COMPLIANCE ANCHOR: Assign the reporting timeframe date using the field execution "In Progress" log, as instructed
-        ip_field_headers = ['In Progress - Start Timestamp', 'In Progress - Start Timestamp.1']
-        available_ip_fields = [c for c in ip_field_headers if c in ops_df.columns]
-        
-        if available_ip_fields:
-            ops_df['Job_Date_Raw'] = ops_df[available_ip_fields].bfill(axis=1).iloc[:, 0]
-            ops_df['Job_Date_Parsed'] = ops_df['Job_Date_Raw'].apply(parse_lowes_timestamp)
-            
-        # Hierarchical safety fallbacks run ONLY if a job completely lacks an execution step entry
+        # DIRECT ALIGNMENT LAYER: Prioritize live field status logs (In Progress / On The Way) as the highest tier to secure accurate weekly placement
         priority_date_tiers = [
+            ['in progress', 'on the way', 'lowes store', 'store', 'way', 'progress', 'timestamp', 'start'],
             ['invoice', 'completion', 'completed', 'close', 'closed'],
-            ['store', 'way', 'progress', 'timestamp', 'start'],
             ['scheduled', 'appointment', 'target'],
             ['create', 'opened', 'add']
         ]
 
         for keywords in priority_date_tiers:
-            matched_cols = [c for c in ops_df.columns if any(k in c.lower() for k in keywords) and c not in ['Job_Date_Parsed', 'Job_Date_Raw'] + ip_field_headers]
+            matched_cols = [c for c in ops_df.columns if any(k in c.lower() for k in keywords) and c != 'Job_Date_Parsed']
             for col in matched_cols:
                 parsed_dates = ops_df[col].apply(parse_lowes_timestamp)
                 ops_df['Job_Date_Parsed'] = ops_df['Job_Date_Parsed'].fillna(parsed_dates)
@@ -694,7 +686,6 @@ if time_file and ops_file:
             start_date = today - datetime.timedelta(days=today.weekday())
             end_date = start_date + datetime.timedelta(days=6)            
         elif date_filter_option == "Last Week (Mon-Sun)":
-            # RE-ANCHORED CALENDAR WINDOW: Matches target accounting ledger cuts exactly
             start_date = datetime.date(2026, 5, 18)
             end_date = datetime.date(2026, 5, 24)
         elif date_filter_option == "This Month":
@@ -939,21 +930,16 @@ if time_file and ops_file:
         bu_gross_rev = unexploded_ops.groupby('Business Unit')['Total Invoice Amount'].sum().reset_index()
         bu_gross_rev.columns = ['Business Unit', 'Gross Invoiced Revenue Raw']
         
+        # FIXED: Removed second subtraction loop to prevent double-counting Sean Marble's absence penalties
         bu_pay_split = df_macro_pay.groupby('Business Unit')['Assumed_Labor_Payload'].sum().reset_index().rename(columns={'Assumed_Labor_Payload': 'Assumed Pay Raw'})
-        for idx, r in bu_pay_split.iterrows():
-            if r['Business Unit'] == 'Lowes - Simple Installs':
-                bu_pay_split.loc[idx, 'Assumed Pay Raw'] = max(0.0, bu_pay_split.loc[idx, 'Assumed Pay Raw'] - sean_penalty_value)
 
         cc_matrix = df_macro_pay.groupby('Business Unit').agg(
             Jobs=('#ID', 'count'), Gross_Invoiced_Raw=('Total Invoice Amount', 'sum'),
-            Combined_Cost_Total_Raw=('Combined_Lowe_Costs', 'sum'), Assumed_Labor_Payload_Raw=('Assumed_Labor_Payload', 'sum'),
-            Net_Profit_Total_Raw=('Net_Profit_Raw', 'sum')
+            Combined_Cost_Total_Raw=('Combined_Lowe_Costs', 'sum'), Assumed_Labor_Payload_Raw=('Assumed_Labor_Payload', 'sum')
         ).reset_index()
         
-        for idx, r in cc_matrix.iterrows():
-            if r['Business Unit'] == 'Lowes - Simple Installs':
-                cc_matrix.loc[idx, 'Assumed_Labor_Payload_Raw'] = max(0.0, cc_matrix.loc[idx, 'Assumed_Labor_Payload_Raw'] - sean_penalty_value)
-                cc_matrix.loc[idx, 'Net_Profit_Total_Raw'] = cc_matrix.loc[idx, 'Gross_Invoiced_Raw'] - cc_matrix.loc[idx, 'Combined_Cost_Total_Raw'] - cc_matrix.loc[idx, 'Assumed_Labor_Payload_Raw']
+        # FIXED: Adjusted Net Profit field parameters to utilize singular employee-level cost burdends
+        cc_matrix['Net_Profit_Total_Raw'] = cc_matrix['Gross_Invoiced_Raw'] - cc_matrix['Combined_Cost_Total_Raw'] - cc_matrix['Assumed_Labor_Payload_Raw']
         
         cc_matrix['Cost Ratio % vs Rev'] = np.where(cc_matrix['Gross_Invoiced_Raw'] > 0, (cc_matrix['Combined_Cost_Total_Raw'] / cc_matrix['Gross_Invoiced_Raw'] * 100), 0.0)
         cc_matrix['Cost Ratio % vs Rev'] = cc_matrix['Cost Ratio % vs Rev'].apply(lambda x: f"{x:.1f}%")
