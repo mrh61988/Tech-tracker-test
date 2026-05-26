@@ -176,7 +176,7 @@ def parse_diff_to_hours(val):
         pass
     return 0.0
 
-# TIMEZONE NORMALIZATION LAYER: Standardizes strict GMT offsets to Arizona local timelines
+# TIMEZONE NORMALIZATION LAYER WITH DAFENMSIVE RANGE VALIDATION
 def parse_lowes_timestamp(val):
     if pd.isna(val) or str(val).strip() in ['', '-', 'NaT']:
         return pd.NaT
@@ -186,8 +186,14 @@ def parse_lowes_timestamp(val):
             clean_s = s.split(' GMT')[0]
             dt = pd.to_datetime(clean_s, errors='coerce')
             if pd.notna(dt):
-                return dt - pd.Timedelta(hours=7) # Subtract 7 hours for standard non-DST Arizona tracking
-        return pd.to_datetime(s, errors='coerce')
+                dt = dt - pd.Timedelta(hours=7) # Normalize strict GMT-7 hours alignment boundaries
+        else:
+            dt = pd.to_datetime(s, errors='coerce')
+            
+        # CRITICAL VALIDATION: Coerce out-of-bounds years to avoid calculation crashes
+        if pd.notna(dt) and (dt.year < 2020 or dt.year > 2030):
+            return pd.NaT
+        return dt
     except:
         return pd.NaT
 
@@ -615,16 +621,21 @@ if time_file and ops_file:
         # --- RE-ENGINEERED DATE SCANNING LAYER WITH FIELD LOG TRACKING LOGS FIRST ---
         ops_df['Job_Date_Parsed'] = pd.NaT
 
-        # DIRECT ALIGNMENT LAYER: Prioritize live field status logs (In Progress / On The Way) as the highest tier to secure accurate weekly placement
+        # DIRECT ALIGNMENT ANCHOR: Assign the tracking date based strictly on execution logs first
         priority_date_tiers = [
             ['in progress', 'on the way', 'lowes store', 'store', 'way', 'progress', 'timestamp', 'start'],
-            ['invoice', 'completion', 'completed', 'close', 'closed'],
+            ['invoice date', 'invoiced', 'completion', 'completed', 'close', 'closed'],
             ['scheduled', 'appointment', 'target'],
             ['create', 'opened', 'add']
         ]
 
+        # EXCLUSION GUARDRAILS: Stops numerical strings from triggering out-of-bounds timestamp parsing exceptions
+        column_exclusion_keywords = ['number', 'id', 'amount', 'cost', 'price', 'phone', 'address', 'zip', 'crew', 'team', 'member']
+
         for keywords in priority_date_tiers:
-            matched_cols = [c for c in ops_df.columns if any(k in c.lower() for k in keywords) and c != 'Job_Date_Parsed']
+            matched_cols = [c for c in ops_df.columns if any(k in c.lower() for k in keywords) 
+                            and not any(ek in c.lower() for ek in column_exclusion_keywords)
+                            and c != 'Job_Date_Parsed']
             for col in matched_cols:
                 parsed_dates = ops_df[col].apply(parse_lowes_timestamp)
                 ops_df['Job_Date_Parsed'] = ops_df['Job_Date_Parsed'].fillna(parsed_dates)
@@ -930,7 +941,6 @@ if time_file and ops_file:
         bu_gross_rev = unexploded_ops.groupby('Business Unit')['Total Invoice Amount'].sum().reset_index()
         bu_gross_rev.columns = ['Business Unit', 'Gross Invoiced Revenue Raw']
         
-        # FIXED: Removed second subtraction loop to prevent double-counting Sean Marble's absence penalties
         bu_pay_split = df_macro_pay.groupby('Business Unit')['Assumed_Labor_Payload'].sum().reset_index().rename(columns={'Assumed_Labor_Payload': 'Assumed Pay Raw'})
 
         cc_matrix = df_macro_pay.groupby('Business Unit').agg(
@@ -938,7 +948,6 @@ if time_file and ops_file:
             Combined_Cost_Total_Raw=('Combined_Lowe_Costs', 'sum'), Assumed_Labor_Payload_Raw=('Assumed_Labor_Payload', 'sum')
         ).reset_index()
         
-        # FIXED: Adjusted Net Profit field parameters to utilize singular employee-level cost burdends
         cc_matrix['Net_Profit_Total_Raw'] = cc_matrix['Gross_Invoiced_Raw'] - cc_matrix['Combined_Cost_Total_Raw'] - cc_matrix['Assumed_Labor_Payload_Raw']
         
         cc_matrix['Cost Ratio % vs Rev'] = np.where(cc_matrix['Gross_Invoiced_Raw'] > 0, (cc_matrix['Combined_Cost_Total_Raw'] / cc_matrix['Gross_Invoiced_Raw'] * 100), 0.0)
@@ -1365,7 +1374,7 @@ if time_file and ops_file:
                 route_eff = route_eff.sort_values(by='Rev per Drive Hour Raw', ascending=False)
                 route_eff['Total Assigned Revenue'] = route_eff['Total_Revenue'].apply(lambda x: f"${x:,.2f}")
                 route_eff['Total Drive Hours'] = route_eff['Total_Drive_Hrs'].apply(lambda x: f"{x:.1f} hrs")
-                route_eff['Revenue per Drive Hour'] = route_eff['Rev per Drive Hour Raw'].apply(lambda x: f"{x:.1f}/hr")
+                route_eff['Revenue per Drive Hour'] = route_eff['Rev per Drive Hour Raw'].apply(lambda x: f"${x:.1f}/hr")
                 st.dataframe(route_eff[['Name', 'Total Assigned Revenue', 'Total Drive Hours', 'Revenue per Drive Hour']].reset_index(drop=True), use_container_width=True)
 
             if "🦺 Multi-Tech Labor Yield vs. Solo Runs" in test_choices:
