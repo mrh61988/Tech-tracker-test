@@ -403,7 +403,8 @@ def run_baselines_matrix(ops_df):
             
         if pd.notna(div_wh_baseline):
             for _, j in t_wh[t_wh['Total_Job_Time_Hours'] > div_wh_baseline].iterrows():
-                jid = int(j['#ID']) if ('#ID} in j and isinstance(j['#ID'], float) and j['#ID'].is_integer()) else (j['#ID'] if '#ID' in j else 'Unknown')
+                # FIXED TYPO: Changed unclosed parenthesis format from ('#ID} to ('#ID' in j)
+                jid = int(j['#ID']) if ('#ID' in j and isinstance(j['#ID'], float) and j['#ID'].is_integer()) else (j['#ID'] if '#ID' in j else 'Unknown')
                 diff_val = j['Total_Job_Time_Hours'] - div_wh_baseline
                 wh_over_baseline_rows.append({
                     "Technician": tech_name,
@@ -822,9 +823,7 @@ if time_file and ops_file:
         final_df = pd.merge(final_df, tech_rev_agg, on='Name', how='left').fillna(0.0)
         final_df['Rev_Per_Clocked_Hr'] = np.where(final_df['Total_Weekly_Clocked_Hrs'] > 0, final_df['Total_Assigned_Revenue'] / final_df['Total_Weekly_Clocked_Hrs'], 0.0)
 
-        # =========================================================================================
-        # 🔧 JOB STATUS TIME ADJUSTMENTS SIDEBAR INTERFACE NATIVE LAYER
-        # =========================================================================================
+        # --- 8. Job Status Time Adjustments Sidebar Parameters Interface Native Layer ---
         st.sidebar.header("🔧 Job Status Time Adjustments")
         global_adj_mins = st.sidebar.number_input("🌍 Global Adj (Minutes)", value=0, step=15, key="global_adj")
         global_adj_hrs = global_adj_mins / 60.0
@@ -836,7 +835,7 @@ if time_file and ops_file:
         final_df['Adjustment_Hrs'] = final_df['Name'].map(adjustments).fillna(0.0)
         final_df['Total_Weekly_Job_Hrs'] = final_df['Total_Weekly_Job_Hrs'] + final_df['Adjustment_Hrs']
 
-        # --- 8. Synchronize Attendance Absence Evaluation Check Loop ---
+        # --- 9. Synchronize Attendance Absence Evaluation Check Loop ---
         the_filtered_techs_list = [t.lower() for t in final_df['Name'].unique()]
         if 'sean marble' in the_filtered_techs_list:
             sean_timecard = final_df[final_df['Name'] == 'Sean Marble'].iloc[0]
@@ -848,7 +847,7 @@ if time_file and ops_file:
             sean_penalty_value = 0.0
         st.session_state['sean_absence_penalty_global'] = sean_penalty_value
 
-        # --- 9. Compute Metric Goals and Allocation Proportional Baselines ---
+        # --- 10. Compute Metric Goals and Allocation Proportional Baselines ---
         final_df['LSI_Goal_Hrs'] = final_df['Simple_Installs_Count'] * 2.0
         final_df['WH_Goal_Hrs'] = final_df['Water_Heaters_Count'] * 3.5
         final_df['Total_Goal_Hrs'] = final_df['LSI_Goal_Hrs'] + final_df['WH_Goal_Hrs']
@@ -869,7 +868,7 @@ if time_file and ops_file:
         final_df['Simple Installs Eff'] = final_df['LSI_Eff_Raw'].apply(lambda x: f"{x:.1f}%")
         final_df['Water Heaters Eff'] = final_df['WH_Eff_Raw'].apply(lambda x: f"{x:.1f}%")
 
-        # --- 10. Compute Payroll Wage Cost Allocations ---
+        # --- 11. Compute Payroll Wage Cost Allocations ---
         rev_per_hour_df_calc = final_df.copy()
         rev_per_hour_df_calc['Assumed Pay Amount'] = rev_per_hour_df_calc.apply(get_adjusted_table_pay, axis=1)
         pay_mapping_dict = dict(zip(rev_per_hour_df_calc['Name'], rev_per_hour_df_calc['Assumed Pay Amount']))
@@ -886,7 +885,7 @@ if time_file and ops_file:
             ops_df['Total Invoice Amount'] * 0.33, ops_df['Allocated_Job_Pay']
         )
         
-        # --- 11. Finalize Labor payload fields back into macro frames ---
+        # --- 12. Finalize Labor payload fields back into macro frames ---
         df_macro_pay['Logged_Time_Pay'] = df_macro_pay['#ID'].map(ops_df.groupby('#ID')['Allocated_Job_Pay'].sum().to_dict()).fillna(0.0)
         df_macro_pay['Assumed_Labor_Payload'] = np.where(
             (df_macro_pay['Business Unit'] == 'Lowes - Simple Installs') & df_macro_pay['Is_Contractor'],
@@ -898,7 +897,7 @@ if time_file and ops_file:
         total_assumed_pay_adjusted = max(0.0, df_macro_pay['Assumed_Labor_Payload'].sum() - sean_penalty_value)
         pay_ratio_pct_adjusted = (total_assumed_pay_adjusted / raw_unsplit_volume * 100) if raw_unsplit_volume > 0 else 0.0
 
-        # --- 12. Compile Financial and Cost Summary Matrices ---
+        # --- 13. Compile Financial and Cost Summary Matrices ---
         bu_gross_rev = unexploded_ops.groupby('Business Unit')['Total Invoice Amount'].sum().reset_index()
         bu_gross_rev.columns = ['Business Unit', 'Gross Invoiced Revenue Raw']
         total_macro_sum = bu_gross_rev['Gross Invoiced Revenue Raw'].sum() if bu_gross_rev['Gross Invoiced Revenue Raw'].sum() > 0 else 1.0
@@ -929,7 +928,6 @@ if time_file and ops_file:
         cc_matrix['Cost Ratio % vs Rev'] = np.where(cc_matrix['Gross_Invoiced_Raw'] > 0, (cc_matrix['Combined_Cost_Total_Raw'] / cc_matrix['Gross_Invoiced_Raw'] * 100), 0.0)
         cc_matrix['Cost Ratio % vs Rev'] = cc_matrix['Cost Ratio % vs Rev'].apply(lambda x: f"{x:.1f}%")
         
-        # FIXED: Core math margin percentage ratio formatting calculation logic restored cleanly
         cc_matrix['Net_Profit_Pct_Raw'] = np.where(cc_matrix['Gross_Invoiced_Raw'] > 0, (cc_matrix['Net_Profit_Total_Raw'] / cc_matrix['Gross_Invoiced_Raw'] * 100), 0.0)
         cc_matrix['Net Profit (%)'] = cc_matrix['Net_Profit_Pct_Raw'].apply(lambda x: f"{x:.1f}%")
         
@@ -1117,7 +1115,7 @@ if time_file and ops_file:
                 combined_cost_sum = df_prof_totals['Combined_Lowe_Costs'].sum()
                 labor_payload_sum = df_prof_totals['Assumed_Labor_Payload'].sum()
                 
-                # FIXED BUG: Only subtract Sean's salary attendance penalty if viewing corporate totals or Simple Installs explicitly!
+                # FIXED: Deduct Sean's absence penalization ONLY if viewing corporate totals or Simple Installs explicitly!
                 if selected_bu_filter in ["All Sectors", "Lowes - Simple Installs"]:
                     labor_payload_sum = max(0.0, labor_payload_sum - sean_penalty_value)
                 
@@ -1492,8 +1490,8 @@ if time_file and ops_file:
                     create_copy_button(final_yield_df, "geographic_revenue_yield_drive_hour")
                 else: st.info("Location Address column missing from raw ops datasets.")
 
-            if "箱 End-of-Day (EOD) Payroll Slippage Auditor" in test_choices:
-                st.markdown("### **箱 End-of-Day (EOD) Payroll Slippage Auditor**")
+            if "🚛 End-of-Day (EOD) Payroll Slippage Auditor" in test_choices:
+                st.markdown("### **🚛 End-of-Day (EOD) Payroll Slippage Auditor**")
                 st.markdown("*(Flags instances where a technician remained clocked in for more than 90 minutes after completing their final job order)*")
                 
                 if 'sample_df' in locals() and not bounds_df.empty:
