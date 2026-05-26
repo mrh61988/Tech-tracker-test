@@ -176,7 +176,7 @@ def parse_diff_to_hours(val):
         pass
     return 0.0
 
-# TIMEZONE NORMALIZATION LAYER WITH DAFENMSIVE RANGE VALIDATION
+# TIMEZONE NORMALIZATION LAYER WITH DEFENSIVE RANGE VALIDATION
 def parse_lowes_timestamp(val):
     if pd.isna(val) or str(val).strip() in ['', '-', 'NaT']:
         return pd.NaT
@@ -618,23 +618,25 @@ if time_file and ops_file:
         ops_df['In_Progress_Time_Hrs'] = (ops_df['In Progress - Completed Total Time in Status'] + ops_df.get('In Progress - Completed Total Time in Status.1', 0)) / 3600.0
         ops_df['Total_Job_Time_Hours'] = ops_df[time_cols].sum(axis=1) / 3600.0
 
-        # --- RE-ENGINEERED DATE SCANNING LAYER WITH FIELD LOG TRACKING LOGS FIRST ---
+        # --- RE-ENGINEERED DATE SCANNING LAYER WITH STRICT "IN PROGRESS" ALIGNMENT ANCHOR ---
         ops_df['Job_Date_Parsed'] = pd.NaT
 
-        # DIRECT ALIGNMENT ANCHOR: Assign the tracking date based strictly on execution logs first
-        priority_date_tiers = [
-            ['in progress', 'on the way', 'lowes store', 'store', 'way', 'progress', 'timestamp', 'start'],
-            ['invoice date', 'invoiced', 'completion', 'completed', 'close', 'closed'],
-            ['scheduled', 'appointment', 'target'],
-            ['create', 'opened', 'add']
-        ]
+        # DIRECT ALIGNMENT ANCHOR: Assign tracking date strictly from 'In Progress' timestamps first, ignoring duration columns
+        ip_cols = [c for c in ops_df.columns if 'in progress' in c.lower() and 'timestamp' in c.lower()]
+        if ip_cols:
+            ops_df['Job_Date_Parsed'] = ops_df[ip_cols].bfill(axis=1).iloc[:, 0].apply(parse_lowes_timestamp)
 
-        # EXCLUSION GUARDRAILS: Stops numerical strings from triggering out-of-bounds timestamp parsing exceptions
-        column_exclusion_keywords = ['number', 'id', 'amount', 'cost', 'price', 'phone', 'address', 'zip', 'crew', 'team', 'member']
+        # HIERARCHICAL FALLBACKS: Only apply if In Progress is missing entirely
+        priority_date_tiers = [
+            ['timestamp'],
+            ['invoice date', 'invoiced', 'completion date', 'completed date', 'closed date'],
+            ['scheduled date', 'appointment date', 'target date'],
+            ['created date', 'date opened', 'date added', 'job date']
+        ]
 
         for keywords in priority_date_tiers:
             matched_cols = [c for c in ops_df.columns if any(k in c.lower() for k in keywords) 
-                            and not any(ek in c.lower() for ek in column_exclusion_keywords)
+                            and 'time in status' not in c.lower() 
                             and c != 'Job_Date_Parsed']
             for col in matched_cols:
                 parsed_dates = ops_df[col].apply(parse_lowes_timestamp)
@@ -646,7 +648,7 @@ if time_file and ops_file:
         # Synchronize operational boundaries for team milestone matrices
         ts_start_cols = ['Lowes Store - Start Timestamp', 'On The Way - Start Timestamp', 'In Progress - Start Timestamp', 'On The Way - Start Timestamp.1', 'In Progress - Start Timestamp.1']
         available_ts_cols = [c for c in ts_start_cols if c in ops_df.columns]
-        available_ts_dt_cols = [c + '_dt' for c in available_ts_cols if c in ops_df.columns]
+        available_ts_dt_cols = [c + '_dt' for c in available_ts_cols]
         for c in available_ts_cols: 
             ops_df[c + '_dt'] = ops_df[c].apply(parse_lowes_timestamp)
         
@@ -941,6 +943,7 @@ if time_file and ops_file:
         bu_gross_rev = unexploded_ops.groupby('Business Unit')['Total Invoice Amount'].sum().reset_index()
         bu_gross_rev.columns = ['Business Unit', 'Gross Invoiced Revenue Raw']
         
+        # FIXED REDUNDANCY: Raw total payload is pulled cleanly without applying Sean's penalty twice at the aggregation level
         bu_pay_split = df_macro_pay.groupby('Business Unit')['Assumed_Labor_Payload'].sum().reset_index().rename(columns={'Assumed_Labor_Payload': 'Assumed Pay Raw'})
 
         cc_matrix = df_macro_pay.groupby('Business Unit').agg(
@@ -1089,9 +1092,6 @@ if time_file and ops_file:
             kpi_gross_volume = df_dash_kpi['Total Invoice Amount'].sum()
             kpi_labor_payload = df_dash_kpi['Assumed_Labor_Payload'].sum()
             
-            if global_macro_bu_key in ["All Sectors", "Lowes - Simple Installs"]:
-                kpi_labor_payload = max(0.0, kpi_labor_payload - sean_penalty_value)
-                
             kpi_pay_ratio = (kpi_labor_payload / kpi_gross_volume * 100) if kpi_gross_volume > 0 else 0.0
             
             dash_metric_col1, dash_metric_col2, dash_metric_col3 = st.columns(3)
@@ -1158,9 +1158,6 @@ if time_file and ops_file:
                 gross_revenue_sum = df_prof_totals['Total Invoice Amount'].sum()
                 combined_cost_sum = df_prof_totals['Combined_Lowe_Costs'].sum()
                 labor_payload_sum = df_prof_totals['Assumed_Labor_Payload'].sum()
-                
-                if auditor_bu_filter in ["All Sectors", "Lowes - Simple Installs"]:
-                    labor_payload_sum = max(0.0, labor_payload_sum - sean_penalty_value)
                 
                 net_profit_sum = gross_revenue_sum - combined_cost_sum - labor_payload_sum
                 
@@ -1374,7 +1371,7 @@ if time_file and ops_file:
                 route_eff = route_eff.sort_values(by='Rev per Drive Hour Raw', ascending=False)
                 route_eff['Total Assigned Revenue'] = route_eff['Total_Revenue'].apply(lambda x: f"${x:,.2f}")
                 route_eff['Total Drive Hours'] = route_eff['Total_Drive_Hrs'].apply(lambda x: f"{x:.1f} hrs")
-                route_eff['Revenue per Drive Hour'] = route_eff['Rev per Drive Hour Raw'].apply(lambda x: f"${x:.1f}/hr")
+                route_eff['Revenue per Drive Hour'] = route_eff['Rev per Drive Hour Raw'].apply(lambda x: f"{x:.1f}/hr")
                 st.dataframe(route_eff[['Name', 'Total Assigned Revenue', 'Total Drive Hours', 'Revenue per Drive Hour']].reset_index(drop=True), use_container_width=True)
 
             if "🦺 Multi-Tech Labor Yield vs. Solo Runs" in test_choices:
@@ -1532,8 +1529,8 @@ if time_file and ops_file:
                     create_copy_button(final_yield_df, "geographic_revenue_yield_drive_hour")
                 else: st.info("Location Address column missing from raw ops datasets.")
 
-            if "🚛 End-of-Day (EOD) Payroll Slippage Auditor" in test_choices:
-                st.markdown("### **🚛 End-of-Day (EOD) Payroll Slippage Auditor**")
+            if "公 End-of-Day (EOD) Payroll Slippage Auditor" in test_choices:
+                st.markdown("### **公 End-of-Day (EOD) Payroll Slippage Auditor**")
                 st.markdown("*(Flags instances where a technician remained clocked in for more than 90 minutes after completing their final job order)*")
                 
                 if 'sample_df' in locals() and not bounds_df.empty:
