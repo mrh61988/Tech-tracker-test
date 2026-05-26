@@ -667,7 +667,6 @@ if time_file and ops_file:
             if len(date_range) == 2:
                 start_date, end_date = date_range
 
-        # BUG RESOLVED: Explicitly safeguard NaT (missing milestone times) from dropping out during weekly query cuts
         if start_date and end_date:
             start_dt = pd.to_datetime(start_date)
             end_dt = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
@@ -823,19 +822,33 @@ if time_file and ops_file:
         final_df = pd.merge(final_df, tech_rev_agg, on='Name', how='left').fillna(0.0)
         final_df['Rev_Per_Clocked_Hr'] = np.where(final_df['Total_Weekly_Clocked_Hrs'] > 0, final_df['Total_Assigned_Revenue'] / final_df['Total_Weekly_Clocked_Hrs'], 0.0)
 
-        # --- 8. Synchronize Attendance Evaluation Loop ---
-        sean_timecard = final_df[final_df['Name'] == 'Sean Marble']
-        if not sean_timecard.empty:
-            sean_row = sean_timecard.iloc[0]
+        # =========================================================================================
+        # 🔧 RESTORED: JOB STATUS TIME ADJUSTMENTS SIDEBAR PARAMETERS INTERFACE NATIVE LAYER
+        # =========================================================================================
+        st.sidebar.header("🔧 Job Status Time Adjustments")
+        global_adj_mins = st.sidebar.number_input("🌍 Global Adj (Minutes)", value=0, step=15, key="global_adj")
+        global_adj_hrs = global_adj_mins / 60.0
+        adjustments = {}
+        for tech in sorted(final_df['Name'].unique()):
+            tech_adj_mins = st.sidebar.number_input(f"{tech} Adj (Minutes)", value=0, step=15, key=f"adj_{tech}")
+            adjustments[tech] = (tech_adj_mins / 60.0) + global_adj_hrs
+            
+        final_df['Adjustment_Hrs'] = final_df['Name'].map(adjustments).fillna(0.0)
+        final_df['Total_Weekly_Job_Hrs'] = final_df['Total_Weekly_Job_Hrs'] + final_df['Adjustment_Hrs']
+
+        # --- 8. Synchronize Attendance Absence Evaluation Check Loop ---
+        the_filtered_techs_list = [t.lower() for t in final_df['Name'].unique()]
+        if 'sean marble' in the_filtered_techs_list:
+            sean_timecard = final_df[final_df['Name'] == 'Sean Marble'].iloc[0]
             unworked_clocked_days = 0
             for d in ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']:
-                if f'{d}_Clocked_Hrs' in sean_row.index and sean_row[f'{d}_Clocked_Hrs'] <= 0: unworked_clocked_days += 1
+                if f'{d}_Clocked_Hrs' in sean_timecard.index and sean_timecard[f'{d}_Clocked_Hrs'] <= 0: unworked_clocked_days += 1
             sean_penalty_value = unworked_clocked_days * 269.23
         else:
             sean_penalty_value = 0.0
         st.session_state['sean_absence_penalty_global'] = sean_penalty_value
 
-        # --- 9. Compute Metric Goals and Efficiencies ---
+        # --- 9. Compute Metric Goals and Allocation Proportional Baselines ---
         final_df['LSI_Goal_Hrs'] = final_df['Simple_Installs_Count'] * 2.0
         final_df['WH_Goal_Hrs'] = final_df['Water_Heaters_Count'] * 3.5
         final_df['Total_Goal_Hrs'] = final_df['LSI_Goal_Hrs'] + final_df['WH_Goal_Hrs']
@@ -882,7 +895,6 @@ if time_file and ops_file:
         )
         df_macro_pay['Net_Profit_Raw'] = df_macro_pay['Total Invoice Amount'] - df_macro_pay['Combined_Lowe_Costs'] - df_macro_pay['Assumed_Labor_Payload']
 
-        # CORE ALLOCATED PIPELINE FIELDS DECLARED ON BASE TIMELINE
         total_assumed_pay_adjusted = max(0.0, df_macro_pay['Assumed_Labor_Payload'].sum() - sean_penalty_value)
         pay_ratio_pct_adjusted = (total_assumed_pay_adjusted / raw_unsplit_volume * 100) if raw_unsplit_volume > 0 else 0.0
 
@@ -1476,9 +1488,6 @@ if time_file and ops_file:
                     st.dataframe(final_yield_df, use_container_width=True)
                     create_copy_button(final_yield_df, "geographic_revenue_yield_drive_hour")
                 else: st.info("Location Address column missing from raw ops datasets.")
-
-            if "Consultation Tracker." in date_filter_option or "漏 End-of-Day (EOD) Payroll Slippage Auditor" in test_choices:
-                pass 
 
             if "🚛 End-of-Day (EOD) Payroll Slippage Auditor" in test_choices:
                 st.markdown("### **🚛 End-of-Day (EOD) Payroll Slippage Auditor**")
