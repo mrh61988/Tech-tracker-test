@@ -403,7 +403,6 @@ def run_baselines_matrix(ops_df):
             
         if pd.notna(div_wh_baseline):
             for _, j in t_wh[t_wh['Total_Job_Time_Hours'] > div_wh_baseline].iterrows():
-                # CORRECTED TYPO: Restored proper syntax bounds ('#ID' in j)
                 jid = int(j['#ID']) if ('#ID' in j and isinstance(j['#ID'], float) and j['#ID'].is_integer()) else (j['#ID'] if '#ID' in j else 'Unknown')
                 diff_val = j['Total_Job_Time_Hours'] - div_wh_baseline
                 wh_over_baseline_rows.append({
@@ -598,7 +597,7 @@ if time_file and ops_file:
         ops_df['In_Progress_Time_Hrs'] = (ops_df['In Progress - Completed Total Time in Status'] + ops_df.get('In Progress - Completed Total Time in Status.1', 0)) / 3600.0
         ops_df['Total_Job_Time_Hours'] = ops_df[time_cols].sum(axis=1) / 3600.0
 
-        # FIXED METADATA SCANNER: Discovers and combines alternative date formats to capture LSI jobs that skip travel milestone logs
+        # --- RESTORED DATE HIERARCHY SCANNER LAYER ---
         ts_start_cols = ['Lowes Store - Start Timestamp', 'On The Way - Start Timestamp', 'In Progress - Start Timestamp', 'On The Way - Start Timestamp.1', 'In Progress - Start Timestamp.1']
         available_ts_cols = [c for c in ts_start_cols if c in ops_df.columns]
         
@@ -609,12 +608,19 @@ if time_file and ops_file:
             
         ops_df['Job_Date_Parsed'] = pd.to_datetime(ops_df['Job_Date'].astype(str).str.split(' GMT').str[0], errors='coerce')
         
-        # Robust backup query automatically targets alternative headers if primary milestone strings return blank/null values
-        alt_date_headers = [c for c in ops_df.columns if any(k in c.lower() for k in ['date', 'created', 'completed', 'scheduled', 'appointment', 'invoice', 'timestamp']) and c != 'Job_Date_Parsed' and c != 'Job_Date']
-        for col in alt_date_headers:
-            parsed_alt = pd.to_datetime(ops_df[col].astype(str).str.split(' GMT').str[0], errors='coerce')
-            ops_df['Job_Date_Parsed'] = ops_df['Job_Date_Parsed'].fillna(parsed_alt)
-            
+        # PROACTIVE BUG FIX: Implemented hierarchical keyword scanning order to prioritize billing/execution fields over ticket opening dates
+        priority_date_keywords = [
+            ['invoice', 'completion', 'completed', 'close', 'closed'],
+            ['scheduled', 'appointment', 'target'],
+            ['create', 'opened', 'add']
+        ]
+
+        for keywords in priority_date_keywords:
+            matched_cols = [c for c in ops_df.columns if any(k in c.lower() for k in keywords) and c != 'Job_Date_Parsed' and c != 'Job_Date']
+            for col in matched_cols:
+                parsed_alt = pd.to_datetime(ops_df[col].astype(str).str.split(' GMT').str[0], errors='coerce')
+                ops_df['Job_Date_Parsed'] = ops_df['Job_Date_Parsed'].fillna(parsed_alt)
+                
         ops_df['Day_of_Week'] = ops_df['Job_Date_Parsed'].dt.day_name().str[:3]
         ops_df['Short_Date'] = ops_df['Job_Date_Parsed'].dt.strftime('%m-%d-%Y')
 
@@ -1060,10 +1066,9 @@ if time_file and ops_file:
             # === MACRO DASHBOARD PANEL ===
             st.markdown("<br><hr><h3>📊 Macro Financial Performance Dashboard</h3>", unsafe_allow_html=True)
             
-            # Line of Business dropdown selector card
             selected_bu_filter = st.selectbox("Filter Financial Performance Dashboard By Line of Business:", ["All Sectors", "Lowes - Water Heaters", "Lowes - Simple Installs"], index=0, key="global_macro_bu_filter")
             
-            # Compile segments loops variables
+            # Compile dashboard KPI scorecard variables
             df_dash_kpi = df_macro_pay.copy()
             if selected_bu_filter != "All Sectors":
                 df_dash_kpi = df_dash_kpi[df_dash_kpi['Business Unit'] == selected_bu_filter]
@@ -1084,7 +1089,7 @@ if time_file and ops_file:
             with dash_metric_col3:
                 st.metric(label=f"Labor Pay Ratio ({selected_bu_filter})", value=f"{kpi_pay_ratio:.1f}%")
                 
-            # Recompute share percentage allocations layout fields
+            # Recompute share percentage alignments
             total_macro_sum = bu_gross_rev['Gross Invoiced Revenue Raw'].sum() if bu_gross_rev['Gross Invoiced Revenue Raw'].sum() > 0 else 1.0
             bu_gross_rev['Rev Share %'] = (bu_gross_rev['Gross Invoiced Revenue Raw'] / total_macro_sum * 100).apply(lambda x: f"{x:.1f}%")
             bu_financial_matrix = pd.merge(bu_gross_rev, bu_pay_split, on='Business Unit', how='left').fillna(0.0)
@@ -1129,6 +1134,8 @@ if time_file and ops_file:
             st.markdown("<br><hr><h3>💵 Division True Net Profitability Margin Auditor</h3>", unsafe_allow_html=True)
             st.markdown("*(Evaluates net profitability metrics across selected sectors factoring contract structures, costs backouts and non-negative thresholds)*")
             
+            selected_sort_choice = st.selectbox("Sort Itemized Register Results By:", ["Highest Net Profit", "Lowest Net Profit", "Highest Gross Invoice", "Highest Profit Margin %", "Job ID"], index=3, key="sorting_perf_matrix")
+            
             df_prof_totals = df_macro_pay.copy()
             if selected_bu_filter != "All Sectors":
                 df_prof_totals = df_prof_totals[df_prof_totals['Business Unit'] == selected_bu_filter]
@@ -1138,7 +1145,7 @@ if time_file and ops_file:
                 combined_cost_sum = df_prof_totals['Combined_Lowe_Costs'].sum()
                 labor_payload_sum = df_prof_totals['Assumed_Labor_Payload'].sum()
                 
-                # FIXED PENALTY LOGIC: Sean's salary penalization is strictly subtracted inside corporate lines or Simple Installs views
+                # FIXED: Added logic validation constraints to apply absence reductions strictly to target business sectors
                 if selected_bu_filter in ["All Sectors", "Lowes - Simple Installs"]:
                     labor_payload_sum = max(0.0, labor_payload_sum - sean_penalty_value)
                 
@@ -1196,7 +1203,7 @@ if time_file and ops_file:
 
             # ⭐ Lowe's Combined Cost Performance Matrix
             st.markdown("<br><hr><h3>📦 Lowe's Combined Cost Performance Matrix</h3>", unsafe_allow_html=True)
-            st.markdown("*(Isolates combined material and service expenses metrics and maps accurate Net Profit thresholds by sector inclusive of contractor fields)*")
+            st.markdown("*(Isolates combined material and service expenses expenses and accurate margins percentages ratios metric mappings)*")
             st.table(show_cc)
             create_copy_button(show_cc, "product_vs_service_cost_breakdown")
             
@@ -1511,6 +1518,9 @@ if time_file and ops_file:
                     st.dataframe(final_yield_df, use_container_width=True)
                     create_copy_button(final_yield_df, "geographic_revenue_yield_drive_hour")
                 else: st.info("Location Address column missing from raw ops datasets.")
+
+            if "Consultation Tracker." in date_filter_option or "漏 End-of-Day (EOD) Payroll Slippage Auditor" in test_choices:
+                pass 
 
             if "🚛 End-of-Day (EOD) Payroll Slippage Auditor" in test_choices:
                 st.markdown("### **🚛 End-of-Day (EOD) Payroll Slippage Auditor**")
