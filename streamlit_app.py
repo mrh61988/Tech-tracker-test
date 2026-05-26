@@ -187,7 +187,7 @@ def parse_lowes_timestamp(val):
             dt = pd.to_datetime(clean_s, errors='coerce')
             if pd.notna(dt):
                 # FIXED BUG: If the time is exactly 00:00:00, it's a date-only field! 
-                # Subtracting 7 hours would push it into the previous day/week.
+                # Subtracting 7 hours would push it into the previous day/week improperly.
                 if dt.hour == 0 and dt.minute == 0 and dt.second == 0:
                     pass
                 else:
@@ -623,24 +623,25 @@ if time_file and ops_file:
         ops_df['In_Progress_Time_Hrs'] = (ops_df['In Progress - Completed Total Time in Status'] + ops_df.get('In Progress - Completed Total Time in Status.1', 0)) / 3600.0
         ops_df['Total_Job_Time_Hours'] = ops_df[time_cols].sum(axis=1) / 3600.0
 
-        # --- EXPLICIT MASTER ANCHOR LAYER ---
+        # --- EXPLICIT MASTER ANCHOR LAYER WITH STRICT COLUMN EXCLUSIONS ---
         ops_df['Job_Date_Parsed'] = pd.NaT
 
-        # DIRECT ALIGNMENT ANCHOR: Uses the literal "Job Start Date" if available as the master anchor
+        # DIRECT ALIGNMENT ANCHOR: Uses exactly "Job Start Date" or "Start Date" as the master anchor if present
         master_cols = [c for c in ops_df.columns if c.strip().lower() in ['job start date', 'start date', 'job date']]
         if master_cols:
             ops_df['Job_Date_Parsed'] = ops_df[master_cols].bfill(axis=1).iloc[:, 0].apply(parse_lowes_timestamp)
 
         # HIERARCHICAL FALLBACKS: Only apply if master anchor is entirely missing
+        # FIXED CRITICAL BUG: Ensured 'Time in Status' columns are explicitly ignored to prevent durations being parsed as dates
         priority_date_tiers = [
-            ['in progress - start timestamp', 'on the way - start timestamp', 'lowes store - start timestamp', 'timestamp'],
+            ['in progress - start timestamp', 'in progress', 'on the way - start timestamp', 'lowes store - start timestamp', 'timestamp'],
             ['invoice date', 'invoiced', 'completion date', 'completed date', 'close date', 'closed date'],
             ['scheduled date', 'appointment date', 'target date'],
             ['created date', 'date opened', 'date added']
         ]
         
         # Guard against duration numbers being accidentally parsed as dates
-        column_exclusion_keywords = ['number', 'id', 'amount', 'cost', 'price', 'phone', 'address', 'zip', 'crew', 'team', 'member', 'time in status']
+        column_exclusion_keywords = ['number', 'id', 'amount', 'cost', 'price', 'phone', 'address', 'zip', 'crew', 'team', 'member', 'time in status', 'time']
 
         for keywords in priority_date_tiers:
             matched_cols = [c for c in ops_df.columns if any(k in c.lower() for k in keywords) 
@@ -947,22 +948,21 @@ if time_file and ops_file:
         )
         df_macro_pay['Net_Profit_Raw'] = df_macro_pay['Total Invoice Amount'] - df_macro_pay['Combined_Lowe_Costs'] - df_macro_pay['Assumed_Labor_Payload']
 
-        total_assumed_pay_adjusted = max(0.0, df_macro_pay['Assumed_Labor_Payload'].sum() - sean_penalty_value)
-        pay_ratio_pct_adjusted = (total_assumed_pay_adjusted / raw_unsplit_volume * 100) if raw_unsplit_volume > 0 else 0.0
-
         # --- 13. Compile Financial and Cost Summary Matrices ---
         bu_gross_rev = unexploded_ops.groupby('Business Unit')['Total Invoice Amount'].sum().reset_index()
         bu_gross_rev.columns = ['Business Unit', 'Gross Invoiced Revenue Raw']
         
         bu_pay_split = df_macro_pay.groupby('Business Unit')['Assumed_Labor_Payload'].sum().reset_index().rename(columns={'Assumed_Labor_Payload': 'Assumed Pay Raw'})
         
-        # FIXED LOGIC: Removed redundant double-deduction of the Sean Marble penalty from macro summary tables
+        # FINAL LOGIC FIX: Removed all secondary deductions of the absence penalty here to prevent Simple Installs pay deflation. 
+        # The penalty is ALREADY factored into Sean Marble's row-level Assumed Pay in get_adjusted_table_pay().
         
         cc_matrix = df_macro_pay.groupby('Business Unit').agg(
             Jobs=('#ID', 'count'), Gross_Invoiced_Raw=('Total Invoice Amount', 'sum'),
-            Combined_Cost_Total_Raw=('Combined_Lowe_Costs', 'sum'), Assumed_Labor_Payload_Raw=('Assumed_Labor_Payload', 'sum'),
-            Net_Profit_Total_Raw=('Net_Profit_Raw', 'sum')
+            Combined_Cost_Total_Raw=('Combined_Lowe_Costs', 'sum'), Assumed_Labor_Payload_Raw=('Assumed_Labor_Payload', 'sum')
         ).reset_index()
+        
+        cc_matrix['Net_Profit_Total_Raw'] = cc_matrix['Gross_Invoiced_Raw'] - cc_matrix['Combined_Cost_Total_Raw'] - cc_matrix['Assumed_Labor_Payload_Raw']
         
         cc_matrix['Cost Ratio % vs Rev'] = np.where(cc_matrix['Gross_Invoiced_Raw'] > 0, (cc_matrix['Combined_Cost_Total_Raw'] / cc_matrix['Gross_Invoiced_Raw'] * 100), 0.0)
         cc_matrix['Cost Ratio % vs Rev'] = cc_matrix['Cost Ratio % vs Rev'].apply(lambda x: f"{x:.1f}%")
