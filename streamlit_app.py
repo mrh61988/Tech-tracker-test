@@ -615,27 +615,30 @@ if time_file and ops_file:
         ops_df['In_Progress_Time_Hrs'] = (ops_df['In Progress - Completed Total Time in Status'] + ops_df.get('In Progress - Completed Total Time in Status.1', 0)) / 3600.0
         ops_df['Total_Job_Time_Hours'] = ops_df[time_cols].sum(axis=1) / 3600.0
 
-        # --- RE-ENGINEERED DATE SCANNING LAYER WITH 'IN PROGRESS' MASTER ANCHOR ---
+        # --- EXPLICIT MASTER ANCHOR LAYER WITH STRICT COLUMN EXCLUSIONS ---
         ops_df['Job_Date_Parsed'] = pd.NaT
 
-        # DIRECT ALIGNMENT ANCHOR: The user specified 'In Progress' timestamps must be the master anchor
-        t1 = [c for c in ops_df.columns if 'in progress' in c.lower() and 'timestamp' in c.lower()]
-        if t1:
-            ops_df['Job_Date_Parsed'] = ops_df[t1].bfill(axis=1).iloc[:, 0].apply(parse_lowes_timestamp)
-
-        # HIERARCHICAL FALLBACKS: Only apply if master anchor is entirely missing
-        fallback_tiers = [
-            [c for c in ops_df.columns if 'on the way' in c.lower() and 'timestamp' in c.lower()],
-            [c for c in ops_df.columns if 'store' in c.lower() and 'timestamp' in c.lower()],
-            [c for c in ops_df.columns if c.strip().lower() in ['job start date', 'start date', 'job date']],
-            [c for c in ops_df.columns if c.strip().lower() in ['completed date', 'completion date', 'invoice date', 'invoiced', 'close date', 'closed date']],
-            [c for c in ops_df.columns if c.strip().lower() in ['scheduled date', 'appointment date', 'target date']],
-            [c for c in ops_df.columns if c.strip().lower() in ['created date', 'date opened', 'date added']]
+        # DIRECT ALIGNMENT ANCHOR: Enforces "Job Start Date" or "In Progress" as the absolute master anchor
+        priority_date_tiers = [
+            ['job start date', 'start date'],
+            ['in progress - start timestamp', 'in progress'],
+            ['on the way - start timestamp', 'on the way'],
+            ['lowes store - start timestamp', 'store'],
+            ['timestamp'],
+            ['job date', 'invoice date', 'invoiced', 'completion date', 'completed date', 'close date', 'closed date'],
+            ['scheduled date', 'appointment date', 'target date'],
+            ['created date', 'date opened', 'date added']
         ]
         
-        for tier in fallback_tiers:
-            if tier:
-                parsed_dates = ops_df[tier].bfill(axis=1).iloc[:, 0].apply(parse_lowes_timestamp)
+        # Guard against duration numbers being accidentally parsed as dates
+        column_exclusion_keywords = ['number', 'id', 'amount', 'cost', 'price', 'phone', 'address', 'zip', 'crew', 'team', 'member', 'time in status', 'time']
+
+        for keywords in priority_date_tiers:
+            matched_cols = [c for c in ops_df.columns if any(k in c.lower() for k in keywords) 
+                            and not any(ek in c.lower() for ek in column_exclusion_keywords)
+                            and c != 'Job_Date_Parsed']
+            for col in matched_cols:
+                parsed_dates = ops_df[col].apply(parse_lowes_timestamp)
                 ops_df['Job_Date_Parsed'] = ops_df['Job_Date_Parsed'].fillna(parsed_dates)
                 
         ops_df['Day_of_Week'] = ops_df['Job_Date_Parsed'].dt.day_name().str[:3]
@@ -1091,9 +1094,6 @@ if time_file and ops_file:
             kpi_gross_volume = df_dash_kpi['Total Invoice Amount'].sum()
             kpi_labor_payload = df_dash_kpi['Assumed_Labor_Payload'].sum()
             
-            if global_macro_bu_key in ["All Sectors", "Lowes - Simple Installs"]:
-                kpi_labor_payload = max(0.0, kpi_labor_payload - sean_penalty_value)
-                
             kpi_pay_ratio = (kpi_labor_payload / kpi_gross_volume * 100) if kpi_gross_volume > 0 else 0.0
             
             dash_metric_col1, dash_metric_col2, dash_metric_col3 = st.columns(3)
@@ -1163,9 +1163,6 @@ if time_file and ops_file:
                 gross_revenue_sum = df_prof_totals['Total Invoice Amount'].sum()
                 combined_cost_sum = df_prof_totals['Combined_Lowe_Costs'].sum()
                 labor_payload_sum = df_prof_totals['Assumed_Labor_Payload'].sum()
-                
-                if auditor_bu_filter in ["All Sectors", "Lowes - Simple Installs"]:
-                    labor_payload_sum = max(0.0, labor_payload_sum - sean_penalty_value)
                 
                 net_profit_sum = gross_revenue_sum - combined_cost_sum - labor_payload_sum
                 
