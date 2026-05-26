@@ -176,7 +176,7 @@ def parse_diff_to_hours(val):
         pass
     return 0.0
 
-# TIMEZONE NORMALIZATION LAYER WITH DEFENSIVE RANGE VALIDATION
+# TIMEZONE NORMALIZATION LAYER WITH DEFENSIVE SHIFT GUARDRAIL
 def parse_lowes_timestamp(val):
     if pd.isna(val) or str(val).strip() in ['', '-', 'NaT']:
         return pd.NaT
@@ -186,7 +186,12 @@ def parse_lowes_timestamp(val):
             clean_s = s.split(' GMT')[0]
             dt = pd.to_datetime(clean_s, errors='coerce')
             if pd.notna(dt):
-                dt = dt - pd.Timedelta(hours=7) # Normalize strict GMT-7 hours alignment boundaries
+                # FIXED BUG: If the time is exactly 00:00:00, it's a date-only field! 
+                # Subtracting 7 hours would push it into the previous day/week.
+                if dt.hour == 0 and dt.minute == 0 and dt.second == 0:
+                    pass
+                else:
+                    dt = dt - pd.Timedelta(hours=7) # Normalize strict GMT-7 hours alignment boundaries
         else:
             dt = pd.to_datetime(s, errors='coerce')
             
@@ -618,25 +623,28 @@ if time_file and ops_file:
         ops_df['In_Progress_Time_Hrs'] = (ops_df['In Progress - Completed Total Time in Status'] + ops_df.get('In Progress - Completed Total Time in Status.1', 0)) / 3600.0
         ops_df['Total_Job_Time_Hours'] = ops_df[time_cols].sum(axis=1) / 3600.0
 
-        # --- RE-ENGINEERED DATE SCANNING LAYER WITH STRICT "IN PROGRESS" ALIGNMENT ANCHOR ---
+        # --- EXPLICIT MASTER ANCHOR LAYER ---
         ops_df['Job_Date_Parsed'] = pd.NaT
 
-        # DIRECT ALIGNMENT ANCHOR: Assign tracking date strictly from 'In Progress' timestamps first, ignoring duration columns
-        ip_cols = [c for c in ops_df.columns if 'in progress' in c.lower() and 'timestamp' in c.lower()]
-        if ip_cols:
-            ops_df['Job_Date_Parsed'] = ops_df[ip_cols].bfill(axis=1).iloc[:, 0].apply(parse_lowes_timestamp)
+        # DIRECT ALIGNMENT ANCHOR: Uses the literal "Job Start Date" if available as the master anchor
+        master_cols = [c for c in ops_df.columns if c.strip().lower() in ['job start date', 'start date', 'job date']]
+        if master_cols:
+            ops_df['Job_Date_Parsed'] = ops_df[master_cols].bfill(axis=1).iloc[:, 0].apply(parse_lowes_timestamp)
 
-        # HIERARCHICAL FALLBACKS: Only apply if In Progress is missing entirely
+        # HIERARCHICAL FALLBACKS: Only apply if master anchor is entirely missing
         priority_date_tiers = [
-            ['timestamp'],
-            ['invoice date', 'invoiced', 'completion date', 'completed date', 'closed date'],
+            ['in progress - start timestamp', 'on the way - start timestamp', 'lowes store - start timestamp', 'timestamp'],
+            ['invoice date', 'invoiced', 'completion date', 'completed date', 'close date', 'closed date'],
             ['scheduled date', 'appointment date', 'target date'],
-            ['created date', 'date opened', 'date added', 'job date']
+            ['created date', 'date opened', 'date added']
         ]
+        
+        # Guard against duration numbers being accidentally parsed as dates
+        column_exclusion_keywords = ['number', 'id', 'amount', 'cost', 'price', 'phone', 'address', 'zip', 'crew', 'team', 'member', 'time in status']
 
         for keywords in priority_date_tiers:
             matched_cols = [c for c in ops_df.columns if any(k in c.lower() for k in keywords) 
-                            and 'time in status' not in c.lower() 
+                            and not any(ek in c.lower() for ek in column_exclusion_keywords)
                             and c != 'Job_Date_Parsed']
             for col in matched_cols:
                 parsed_dates = ops_df[col].apply(parse_lowes_timestamp)
@@ -648,7 +656,7 @@ if time_file and ops_file:
         # Synchronize operational boundaries for team milestone matrices
         ts_start_cols = ['Lowes Store - Start Timestamp', 'On The Way - Start Timestamp', 'In Progress - Start Timestamp', 'On The Way - Start Timestamp.1', 'In Progress - Start Timestamp.1']
         available_ts_cols = [c for c in ts_start_cols if c in ops_df.columns]
-        available_ts_dt_cols = [c + '_dt' for c in available_ts_cols]
+        available_ts_dt_cols = [c + '_dt' for c in available_ts_cols if c in ops_df.columns]
         for c in available_ts_cols: 
             ops_df[c + '_dt'] = ops_df[c].apply(parse_lowes_timestamp)
         
@@ -939,19 +947,22 @@ if time_file and ops_file:
         )
         df_macro_pay['Net_Profit_Raw'] = df_macro_pay['Total Invoice Amount'] - df_macro_pay['Combined_Lowe_Costs'] - df_macro_pay['Assumed_Labor_Payload']
 
+        total_assumed_pay_adjusted = max(0.0, df_macro_pay['Assumed_Labor_Payload'].sum() - sean_penalty_value)
+        pay_ratio_pct_adjusted = (total_assumed_pay_adjusted / raw_unsplit_volume * 100) if raw_unsplit_volume > 0 else 0.0
+
         # --- 13. Compile Financial and Cost Summary Matrices ---
         bu_gross_rev = unexploded_ops.groupby('Business Unit')['Total Invoice Amount'].sum().reset_index()
         bu_gross_rev.columns = ['Business Unit', 'Gross Invoiced Revenue Raw']
         
-        # FIXED REDUNDANCY: Raw total payload is pulled cleanly without applying Sean's penalty twice at the aggregation level
         bu_pay_split = df_macro_pay.groupby('Business Unit')['Assumed_Labor_Payload'].sum().reset_index().rename(columns={'Assumed_Labor_Payload': 'Assumed Pay Raw'})
-
+        
+        # FIXED LOGIC: Removed redundant double-deduction of the Sean Marble penalty from macro summary tables
+        
         cc_matrix = df_macro_pay.groupby('Business Unit').agg(
             Jobs=('#ID', 'count'), Gross_Invoiced_Raw=('Total Invoice Amount', 'sum'),
-            Combined_Cost_Total_Raw=('Combined_Lowe_Costs', 'sum'), Assumed_Labor_Payload_Raw=('Assumed_Labor_Payload', 'sum')
+            Combined_Cost_Total_Raw=('Combined_Lowe_Costs', 'sum'), Assumed_Labor_Payload_Raw=('Assumed_Labor_Payload', 'sum'),
+            Net_Profit_Total_Raw=('Net_Profit_Raw', 'sum')
         ).reset_index()
-        
-        cc_matrix['Net_Profit_Total_Raw'] = cc_matrix['Gross_Invoiced_Raw'] - cc_matrix['Combined_Cost_Total_Raw'] - cc_matrix['Assumed_Labor_Payload_Raw']
         
         cc_matrix['Cost Ratio % vs Rev'] = np.where(cc_matrix['Gross_Invoiced_Raw'] > 0, (cc_matrix['Combined_Cost_Total_Raw'] / cc_matrix['Gross_Invoiced_Raw'] * 100), 0.0)
         cc_matrix['Cost Ratio % vs Rev'] = cc_matrix['Cost Ratio % vs Rev'].apply(lambda x: f"{x:.1f}%")
