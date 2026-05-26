@@ -176,23 +176,18 @@ def parse_diff_to_hours(val):
         pass
     return 0.0
 
-# TIMEZONE NORMALIZATION LAYER WITH DEFENSIVE SHIFT GUARDRAIL
+# TIMEZONE NORMALIZATION LAYER: Pure exact date extraction without offset shifting
 def parse_lowes_timestamp(val):
     if pd.isna(val) or str(val).strip() in ['', '-', 'NaT']:
         return pd.NaT
     try:
         s = str(val).strip()
         if 'GMT' in s:
-            clean_s = s.split(' GMT')[0]
-            dt = pd.to_datetime(clean_s, errors='coerce')
-            if pd.notna(dt):
-                if dt.hour == 0 and dt.minute == 0 and dt.second == 0:
-                    pass
-                else:
-                    dt = dt - pd.Timedelta(hours=7)
-        else:
-            dt = pd.to_datetime(s, errors='coerce')
-            
+            s = s.split(' GMT')[0]
+        
+        dt = pd.to_datetime(s, errors='coerce')
+        
+        # CRITICAL VALIDATION: Coerce out-of-bounds years to avoid calculation crashes
         if pd.notna(dt) and (dt.year < 2020 or dt.year > 2030):
             return pd.NaT
         return dt
@@ -620,32 +615,27 @@ if time_file and ops_file:
         ops_df['In_Progress_Time_Hrs'] = (ops_df['In Progress - Completed Total Time in Status'] + ops_df.get('In Progress - Completed Total Time in Status.1', 0)) / 3600.0
         ops_df['Total_Job_Time_Hours'] = ops_df[time_cols].sum(axis=1) / 3600.0
 
-        # --- EXPLICIT MASTER ANCHOR LAYER WITH STRICT COLUMN EXCLUSIONS ---
+        # --- RE-ENGINEERED DATE SCANNING LAYER WITH 'IN PROGRESS' MASTER ANCHOR ---
         ops_df['Job_Date_Parsed'] = pd.NaT
 
-        # DIRECT ALIGNMENT ANCHOR: Uses exactly "Job Start Date" or "Start Date" as the master anchor if present
-        master_cols = [c for c in ops_df.columns if c.strip().lower() in ['job start date', 'start date', 'job date']]
-        if master_cols:
-            ops_df['Job_Date_Parsed'] = ops_df[master_cols].bfill(axis=1).iloc[:, 0].apply(parse_lowes_timestamp)
+        # DIRECT ALIGNMENT ANCHOR: The user specified 'In Progress' timestamps must be the master anchor
+        t1 = [c for c in ops_df.columns if 'in progress' in c.lower() and 'timestamp' in c.lower()]
+        if t1:
+            ops_df['Job_Date_Parsed'] = ops_df[t1].bfill(axis=1).iloc[:, 0].apply(parse_lowes_timestamp)
 
         # HIERARCHICAL FALLBACKS: Only apply if master anchor is entirely missing
-        # FIXED CRITICAL BUG: Ensured 'Time in Status' columns are explicitly ignored to prevent durations being parsed as dates
-        priority_date_tiers = [
-            ['in progress - start timestamp', 'in progress', 'on the way - start timestamp', 'lowes store - start timestamp', 'timestamp'],
-            ['invoice date', 'invoiced', 'completion date', 'completed date', 'close date', 'closed date'],
-            ['scheduled date', 'appointment date', 'target date'],
-            ['created date', 'date opened', 'date added']
+        fallback_tiers = [
+            [c for c in ops_df.columns if 'on the way' in c.lower() and 'timestamp' in c.lower()],
+            [c for c in ops_df.columns if 'store' in c.lower() and 'timestamp' in c.lower()],
+            [c for c in ops_df.columns if c.strip().lower() in ['job start date', 'start date', 'job date']],
+            [c for c in ops_df.columns if c.strip().lower() in ['completed date', 'completion date', 'invoice date', 'invoiced', 'close date', 'closed date']],
+            [c for c in ops_df.columns if c.strip().lower() in ['scheduled date', 'appointment date', 'target date']],
+            [c for c in ops_df.columns if c.strip().lower() in ['created date', 'date opened', 'date added']]
         ]
         
-        # Guard against duration numbers being accidentally parsed as dates
-        column_exclusion_keywords = ['number', 'id', 'amount', 'cost', 'price', 'phone', 'address', 'zip', 'crew', 'team', 'member', 'time in status']
-
-        for keywords in priority_date_tiers:
-            matched_cols = [c for c in ops_df.columns if any(k in c.lower() for k in keywords) 
-                            and not any(ek in c.lower() for ek in column_exclusion_keywords)
-                            and c != 'Job_Date_Parsed']
-            for col in matched_cols:
-                parsed_dates = ops_df[col].apply(parse_lowes_timestamp)
+        for tier in fallback_tiers:
+            if tier:
+                parsed_dates = ops_df[tier].bfill(axis=1).iloc[:, 0].apply(parse_lowes_timestamp)
                 ops_df['Job_Date_Parsed'] = ops_df['Job_Date_Parsed'].fillna(parsed_dates)
                 
         ops_df['Day_of_Week'] = ops_df['Job_Date_Parsed'].dt.day_name().str[:3]
@@ -903,7 +893,6 @@ if time_file and ops_file:
         final_df['WH_Goal_Hrs'] = final_df['Water_Heaters_Count'] * 3.5
         final_df['Total_Goal_Hrs'] = final_df['LSI_Goal_Hrs'] + final_df['WH_Goal_Hrs']
         
-        # COMPLETE SAFEGUARD REFACTOR: Replaced all division logic with .replace(0, np.nan) to permanently block float division by zero exceptions
         final_df['Assumed_LSI_Clocked'] = (final_df['Total_Weekly_Clocked_Hrs'] * (final_df['LSI_Goal_Hrs'] / final_df['Total_Goal_Hrs'].replace(0, np.nan))).fillna(0.0)
         final_df['Assumed_WH_Clocked'] = (final_df['Total_Weekly_Clocked_Hrs'] * (final_df['WH_Goal_Hrs'] / final_df['Total_Goal_Hrs'].replace(0, np.nan))).fillna(0.0)
 
@@ -1186,7 +1175,7 @@ if time_file and ops_file:
                     "Total Combined Cost": f"${combined_cost_sum:,.2f}",
                     "Tech Wage Burden": f"${labor_payload_sum:,.2f}",
                     "Net Profit ($)": f"${net_profit_sum:,.2f}",
-                    "Net Profit (%)": f"{(net_profit_sum / gross_revenue_sum * 100):.1f}%" if gross_revenue_sum != 0 else "0.0%"
+                    "Net Profit (%)": f"{(net_profit_sum / gross_revenue_sum * 100):.1f}%" if gross_revenue_sum > 0 else "0.0%"
                 }])
                 st.table(totals_summary_df)
                 create_copy_button(totals_summary_df, "profitability_summary_totals")
